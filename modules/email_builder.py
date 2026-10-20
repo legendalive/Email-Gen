@@ -75,12 +75,11 @@ def summarize_missed_area_with_ai(
 def convert_email_to_rich_html(plain_text: str) -> str:
     """
     Converts plain text into email-client compliant Rich HTML with native nested lists.
-    Leaves text color completely unforced (inheriting native email client colors)
-    so it renders crisp black in light mode and pure white in dark mode.
+    Enforces font-size: 9pt with proportional line-height and spacing.
     """
     html_out = [
         '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
-        'font-size: 14px; line-height: 1.6; max-width: 650px;">'
+        'font-size: 9pt; line-height: 1.5; max-width: 650px;">'
     ]
 
     blocks = plain_text.split("\n\n")
@@ -92,7 +91,7 @@ def convert_email_to_rich_html(plain_text: str) -> str:
         # Check if block contains call bullet entries
         if block.startswith("• Call") or "\n• Call" in block:
             lines = block.split("\n")
-            html_out.append('<ul style="list-style-type: disc; margin: 12px 0 16px 0; padding-left: 20px;">')
+            html_out.append('<ul style="list-style-type: disc; margin: 10px 0 14px 0; padding-left: 18px;">')
             
             in_sublist = False
             for line in lines:
@@ -103,8 +102,8 @@ def convert_email_to_rich_html(plain_text: str) -> str:
                         in_sublist = False
                     
                     call_title = stripped.lstrip("•").strip()
-                    html_out.append(f'<li style="margin-bottom: 10px;"><b>{call_title}</b>')
-                    html_out.append('<ul style="list-style-type: circle; margin-top: 4px; margin-bottom: 6px; padding-left: 22px;">')
+                    html_out.append(f'<li style="margin-bottom: 8px; font-size: 9pt;"><b>{call_title}</b>')
+                    html_out.append('<ul style="list-style-type: circle; margin-top: 3px; margin-bottom: 5px; padding-left: 20px;">')
                     in_sublist = True
                 elif stripped.startswith("◦"):
                     item_text = stripped.lstrip("◦").strip()
@@ -113,9 +112,9 @@ def convert_email_to_rich_html(plain_text: str) -> str:
                         formatted_item = f"<b>{cat_part.strip()}:</b> {advice_part.strip()}"
                     else:
                         formatted_item = item_text
-                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal;">{formatted_item}</li>')
+                    html_out.append(f'<li style="margin-bottom: 3px; font-weight: normal; font-size: 9pt;">{formatted_item}</li>')
                 elif stripped:
-                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal;">{stripped}</li>')
+                    html_out.append(f'<li style="margin-bottom: 3px; font-weight: normal; font-size: 9pt;">{stripped}</li>')
 
             if in_sublist:
                 html_out.append('</ul></li>')
@@ -123,7 +122,7 @@ def convert_email_to_rich_html(plain_text: str) -> str:
 
         else:
             # Paragraph text (Greeting, Summary sentence, Closing statement)
-            html_out.append(f'<p style="margin: 0 0 14px 0;">{block}</p>')
+            html_out.append(f'<p style="margin: 0 0 10px 0; font-size: 9pt;">{block}</p>')
 
     html_out.append('</div>')
     return "".join(html_out)

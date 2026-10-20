@@ -13,30 +13,82 @@ def summarize_missed_area_with_ai(
     openrouter_key: str,
     groq_key: str
 ) -> str:
-    """Uses LLM to summarize a missed area into a single concise sentence describing what went wrong."""
+    """
+    Transforms raw reviewer comments into a direct, punchy bullet point
+    explaining specifically what the agent did wrong.
+    """
     clean_cat = scrub_sensitive_text(category)
     clean_reason = scrub_sensitive_text(raw_reason)
 
-    # If the comment is already very brief and direct, use it without overhead
-    if len(clean_reason.split()) <= 8 and "failed" not in clean_reason.lower():
-        return f"{clean_cat}: {clean_reason}"
-
     sys_prompt = (
-        "You are a strict QA coach. Summarize what the agent did wrong into a single concise phrase. "
-        "Do not write greetings, pleasantries, or preamble. Aim for 0 verbosity. "
-        "Never mention company names or customer names."
+        "You are a strict QA coach. Write a single, concise bullet point stating specifically "
+        "what the agent did wrong on the call based on the reviewer notes.\n"
+        "RULES:\n"
+        "1. Start directly with what was done wrong (e.g., 'Failed to...', 'Did not...', 'Omitted...').\n"
+        "2. Do NOT mention category labels, codes, or reviewer names.\n"
+        "3. Zero conversational filler, zero fluff. Maximum 1 clear sentence.\n"
+        "4. Never mention company names."
     )
     if custom_rules:
-        sys_prompt += f"\nSupplementary rules: {custom_rules}"
+        sys_prompt += f"\nSupplementary guidelines: {custom_rules}"
 
-    user_prompt = f"Category: {clean_cat}\nReviewer notes: {clean_reason}\nWhat did the agent do wrong?"
+    user_prompt = f"Category Context: {clean_cat}\nReviewer notes: {clean_reason}\nWhat did the agent do wrong?"
     try:
         summary, _, _ = call_llm_resilient(sys_prompt, user_prompt, openrouter_key, groq_key)
-        # Clean any trailing punctuation or extra quotes
         summary = summary.replace('"', '').replace("'", "").strip()
-        return f"{clean_cat}: {summary}"
+        summary = re.sub(r"^[-*•\d.]+\s*", "", summary).strip()
+        return summary
     except Exception:
-        return f"{clean_cat}: {clean_reason}"
+        fallback = clean_reason if clean_reason else f"Did not meet requirements for {clean_cat}."
+        return fallback
+
+def convert_email_to_rich_html(plain_text: str) -> str:
+    """
+    Converts plain text email into email-client compliant Rich HTML with inline styles.
+    When copied to clipboard as text/html, Gmail and Outlook paste this natively with
+    true bold headings and real indented bullet lists.
+    """
+    html_out = [
+        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
+        'font-size: 14px; line-height: 1.6; color: #1e293b; max-width: 650px;">'
+    ]
+
+    paragraphs = plain_text.split("\n\n")
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        # Detect call headers like [0790144494 and 85%]
+        if para.startswith("[") and "]" in para:
+            lines = para.split("\n")
+            header = lines[0].strip()
+            html_out.append(
+                f'<p style="margin: 18px 0 6px 0; font-size: 15px; font-weight: bold; color: #0f172a; '
+                f'background-color: #f1f5f9; padding: 6px 10px; border-radius: 4px; display: inline-block;">{header}</p>'
+            )
+
+            rest = lines[1:]
+            bullets = [l.strip() for l in rest if l.strip().startswith("•")]
+            non_bullets = [l.strip() for l in rest if not l.strip().startswith("•")]
+
+            for nb in non_bullets:
+                if nb:
+                    html_out.append(f'<p style="margin: 4px 0 8px 0; color: #334155;">{nb}</p>')
+
+            if bullets:
+                html_out.append('<ul style="margin: 6px 0 16px 0; padding-left: 22px;">')
+                for b in bullets:
+                    cleaned_b = b.lstrip("•").strip()
+                    html_out.append(f'<li style="margin-bottom: 5px; color: #334155;">{cleaned_b}</li>')
+                html_out.append('</ul>')
+
+        else:
+            # Regular text paragraphs (Greeting, Week Summary, Closing note)
+            html_out.append(f'<p style="margin: 0 0 14px 0; color: #1e293b;">{para}</p>')
+
+    html_out.append('</div>')
+    return "".join(html_out)
 
 def build_feedback_email_for_agent(
     agent_name: str,
@@ -49,8 +101,7 @@ def build_feedback_email_for_agent(
 ) -> Tuple[str, str, str]:
     """
     Deterministic Structural Assembler:
-    Guarantees true headings, true unicode bullets, exact paragraph spacing,
-    and 100% adherence to rules without relying on LLM to format lines.
+    Guarantees true headings, true bullets, exact spacing, and zero verbosity.
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
@@ -66,23 +117,21 @@ def build_feedback_email_for_agent(
         )
         return email, "Deterministic Rule", "Internal"
 
-    # 2. Standard Structural Build
+    # 2. Standard Consolidation
     email_blocks = []
     email_blocks.append(f"Dear {first_name}")
-    
+
     verb = "was" if total_calls == 1 else "were"
     call_word = "call" if total_calls == 1 else "calls"
     email_blocks.append(f"In {week}, {total_calls} of your {call_word} {verb} audited averaging {avg_score}%. Below are the missed areas;")
 
     has_any_missed_area = False
-    models_used = set()
 
     for idx, call in enumerate(calls, start=1):
         phone_num = str(call.get("phone", f"Call #{idx}")).strip()
         score_val = call.get("qa_score", 0)
         missed = call.get("missed_areas", [])
 
-        # Heading format: [Calling Number and score]
         call_header = f"[{phone_num} and {int(score_val) if score_val.is_integer() else score_val}%]"
 
         if score_val >= 100 and not missed:
@@ -95,7 +144,6 @@ def build_feedback_email_for_agent(
                 cat = item.get("category", "")
                 reason = item.get("reason", "")
                 
-                # Polish the missed point
                 bullet_desc = summarize_missed_area_with_ai(
                     category=cat,
                     raw_reason=reason,
@@ -104,12 +152,11 @@ def build_feedback_email_for_agent(
                     groq_key=groq_key
                 )
                 bullet_lines.append(f"• {bullet_desc}")
-                
+
             email_blocks.append("\n".join(bullet_lines))
 
-    # Closing statement
     if has_any_missed_area:
         email_blocks.append("Please work on the highlighted areas. I have attached the audited call for your reference.")
 
     final_email = "\n\n".join(email_blocks)
-    return final_email, "Hybrid Engine (Deterministic + LLM)", "OpenRouter/Groq"
+    return final_email, "Hybrid Engine (Rich Format)", "OpenRouter/Groq"

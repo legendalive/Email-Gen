@@ -1,6 +1,5 @@
 import streamlit as st
 import config
-from modules.llm_engine import call_llm_resilient
 from modules.anonymizer import extract_first_name
 from modules.excel_parser import parse_excel_report
 from modules.email_builder import build_feedback_email_for_agent
@@ -28,7 +27,7 @@ if "current_agent_idx" not in st.session_state:
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
     st.title("⚙️ System Settings")
-    st.caption("Saved locally. Never pushed to Git.")
+    st.caption("Settings persist across calls and are never exposed in Git.")
     
     st.subheader("🔑 API Configuration")
     openrouter_key = st.text_input(
@@ -42,7 +41,7 @@ with st.sidebar:
         "Groq API Key (Fallback)",
         value=st.session_state.settings.get("groq_api_key", ""),
         type="password",
-        help="Fallback API. If OpenRouter fails, cascades seamlessly to Groq."
+        help="Fallback API. Cascades seamlessly to Groq free models if OpenRouter fails."
     )
     
     st.subheader("📅 Evaluation Scope")
@@ -77,7 +76,7 @@ with st.sidebar:
 
 # ----------------- MAIN VIEW -----------------
 st.title("✉️ QA Feedback Email Generator")
-st.markdown("Automated consolidation of QA call evaluations into direct agent emails.")
+st.markdown("Automated, privacy-first consolidation of QA call evaluations into direct agent emails.")
 
 st.divider()
 
@@ -109,7 +108,6 @@ if uploaded_file is not None:
         
         st.success(f"Report Loaded: **{total_calls} calls** across **{total_agents} agents**.")
         
-        # Summary expander
         with st.expander("📊 View Parsed Agents Summary Table", expanded=False):
             summary_rows = []
             for agent, calls in parsed_data.items():
@@ -138,11 +136,7 @@ if st.session_state.parsed_agents:
     agents_list = list(st.session_state.parsed_agents.keys())
     total_agents = len(agents_list)
     
-    c_btn1, c_btn2 = st.columns([2, 5])
-    with c_btn1:
-        start_generation = st.button("⚡ Generate Emails for All Agents", type="primary", use_container_width=True)
-    
-    if start_generation:
+    if st.button("⚡ Generate Emails for All Agents", type="primary"):
         or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
         gr_k = st.session_state.settings.get("groq_api_key", "").strip()
         week_val = st.session_state.settings.get("current_week", "Week 30")
@@ -156,7 +150,7 @@ if st.session_state.parsed_agents:
             
             for idx, agent in enumerate(agents_list):
                 calls = st.session_state.parsed_agents[agent]
-                status_box.info(f"Processing agent {idx + 1} of {total_agents}: **{agent}**...")
+                status_box.info(f"Generating for {agent} ({idx + 1}/{total_agents})...")
                 
                 email_text, model, prov = build_feedback_email_for_agent(
                     agent_name=agent,
@@ -165,7 +159,7 @@ if st.session_state.parsed_agents:
                     custom_rules=custom_r,
                     openrouter_key=or_k,
                     groq_key=gr_k,
-                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents} ({agent}): {msg}")
+                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents}: {msg}")
                 )
                 
                 st.session_state.generated_emails[agent] = {
@@ -185,7 +179,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     agents = list(st.session_state.generated_emails.keys())
     num_agents = len(agents)
     
-    # Boundary checks for current index
     if st.session_state.current_agent_idx >= num_agents:
         st.session_state.current_agent_idx = num_agents - 1
     if st.session_state.current_agent_idx < 0:
@@ -203,39 +196,56 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     hdr1, hdr2 = st.columns([3, 1])
     with hdr1:
         st.markdown(f"### **Agent ({curr_idx + 1} of {num_agents}): {current_agent}**")
-        st.caption(f"Audited Calls: {len(agent_calls)} | Average QA Score: {avg_s}% | Generated via: `{agent_record['model']}` ({agent_record['provider']})")
+        st.caption(f"Audited Calls: {len(agent_calls)} | Average QA Score: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
     
-    # Email Text Editor
+    # Text Area
     edited_email = st.text_area(
         label="Feedback Email Draft (Editable)",
         value=agent_record["email"],
         height=320,
         key=f"editor_{curr_idx}"
     )
-    # Save edits back to session
     st.session_state.generated_emails[current_agent]["email"] = edited_email
     
     # Navigation Buttons (Back & Next)
-    nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 2])
+    b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
     
-    with nav_col1:
-        if st.button("⬅️ Previous Agent", disabled=(curr_idx == 0), use_container_width=True):
+    with b_col1:
+        if st.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
             st.session_state.current_agent_idx -= 1
             st.rerun()
             
-    with nav_col2:
-        if st.button("Next Agent ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True):
+    with b_col2:
+        if st.button("Next ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True):
             st.session_state.current_agent_idx += 1
             st.rerun()
             
-    with nav_col3:
+    with b_col3:
         st.download_button(
-            label=f"💾 Download {extract_first_name(current_agent)}'s Email (.txt)",
+            label=f"💾 Download This Email",
             data=edited_email,
             file_name=f"Feedback_{extract_first_name(current_agent)}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
             use_container_width=True
         )
 
+    with b_col4:
+        # Build consolidated text for all agents
+        all_emails_export = []
+        for a_name in agents:
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(f"AGENT: {a_name}")
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(st.session_state.generated_emails[a_name]["email"])
+            all_emails_export.append("\n\n")
+            
+        st.download_button(
+            label="📦 Download All Emails (.txt)",
+            data="\n".join(all_emails_export),
+            file_name=f"All_Feedback_Emails_{st.session_state.settings.get('current_week', 'Week')}.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
 else:
-    st.info("Upload an Excel file above to parse agent evaluations and generate emails.")
+    st.info("Upload an Excel report above to begin generating emails.")

@@ -3,6 +3,7 @@ import config
 from modules.anonymizer import extract_first_name
 from modules.excel_parser import parse_excel_report
 from modules.email_builder import build_feedback_email_for_agent
+from modules.llm_engine import test_openrouter_connection, test_groq_connection
 
 st.set_page_config(
     page_title="QA Email Generator",
@@ -24,41 +25,66 @@ if "generated_emails" not in st.session_state:
 if "current_agent_idx" not in st.session_state:
     st.session_state.current_agent_idx = 0
 
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
+def clear_all_data():
+    """Resets all parsed and generated data for a clean session."""
+    st.session_state.parsed_agents = None
+    st.session_state.generated_emails = {}
+    st.session_state.current_agent_idx = 0
+    st.session_state.uploader_key += 1
+
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
     st.title("⚙️ System Settings")
-    st.caption("Settings persist across calls and are never exposed in Git.")
+    st.caption("Saved locally / via Cloud Secrets.")
     
-    st.subheader("🔑 API Configuration")
+    # 1. OpenRouter Section with Dedicated Test Button
+    st.subheader("🔑 OpenRouter (Primary)")
     openrouter_key = st.text_input(
-        "OpenRouter API Key (Primary)",
+        "OpenRouter API Key",
         value=st.session_state.settings.get("openrouter_api_key", ""),
-        type="password",
-        help="Primary API. Automatically cycles to the best available free model."
+        type="password"
     )
-    
+    if st.button("⚡ Test OpenRouter", use_container_width=True):
+        with st.spinner("Testing OpenRouter..."):
+            ok, model_or_err, lat = test_openrouter_connection(openrouter_key.strip())
+            if ok:
+                st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
+            else:
+                st.error(f"Failed ({lat}s): {model_or_err}")
+
+    # 2. Groq Section with Dedicated Test Button
+    st.subheader("⚡ Groq (Ultra-Fast Fallback)")
     groq_key = st.text_input(
-        "Groq API Key (Fallback)",
+        "Groq API Key",
         value=st.session_state.settings.get("groq_api_key", ""),
-        type="password",
-        help="Fallback API. Cascades seamlessly to Groq free models if OpenRouter fails."
+        type="password"
     )
-    
-    st.subheader("📅 Evaluation Scope")
+    if st.button("⚡ Test Groq", use_container_width=True):
+        with st.spinner("Testing Groq..."):
+            ok, model_or_err, lat = test_groq_connection(groq_key.strip())
+            if ok:
+                st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
+            else:
+                st.error(f"Failed ({lat}s): {model_or_err}")
+
+    st.divider()
+
+    # 3. Scope & Rules
+    st.subheader("📅 Scope & Rules")
     current_week = st.text_input(
         "Current Week",
         value=st.session_state.settings.get("current_week", "Week 30"),
-        placeholder="e.g. Week 30, Week 39",
-        help="The week injected into all outgoing feedback emails."
+        placeholder="e.g. Week 30, Week 39"
     )
     
-    st.subheader("📝 Supplementary Rules")
     custom_rules = st.text_area(
         "Custom AI Instructions",
         value=st.session_state.settings.get("custom_rules", ""),
-        height=130,
-        placeholder="Enter supplementary rules here...",
-        help="Appended to hardcoded system rules for each email generation."
+        height=100,
+        placeholder="Supplementary instructions..."
     )
     
     if st.button("💾 Save Settings", use_container_width=True, type="primary"):
@@ -70,17 +96,25 @@ with st.sidebar:
         }
         if config.save_settings(new_settings):
             st.session_state.settings = new_settings
-            st.success("Settings saved successfully!")
+            st.success("Settings saved!")
         else:
             st.error("Error saving settings.")
 
 # ----------------- MAIN VIEW -----------------
-st.title("✉️ QA Feedback Email Generator")
-st.markdown("Automated, privacy-first consolidation of QA call evaluations into direct agent emails.")
+title_col, clear_col = st.columns([4, 1])
+with title_col:
+    st.title("✉️ QA Feedback Email Generator")
+    st.markdown("Consolidate call evaluations into direct agent emails with zero PII leakage.")
+with clear_col:
+    st.write("")
+    st.write("")
+    if st.button("🗑️ Clear Everything", type="secondary", use_container_width=True):
+        clear_all_data()
+        st.rerun()
 
 st.divider()
 
-# System Readiness Monitor
+# System Monitor
 col1, col2, col3 = st.columns(3)
 has_or = bool(st.session_state.settings.get("openrouter_api_key"))
 has_groq = bool(st.session_state.settings.get("groq_api_key"))
@@ -90,42 +124,45 @@ with col1:
 with col2:
     st.metric("Groq (Fallback)", "Configured" if has_groq else "Not Set", "Protected" if has_groq else "Optional", delta_color="normal" if has_groq else "off")
 with col3:
-    st.metric("Active Target Scope", st.session_state.settings.get("current_week", "Not Set"))
+    st.metric("Target Week Scope", st.session_state.settings.get("current_week", "Not Set"))
 
 st.divider()
 
 # ----------------- 1. EXCEL UPLOAD SECTION -----------------
 st.subheader("📂 1. Upload QA Evaluation Report")
-uploaded_file = st.file_uploader("Upload Excel QA Report (.xlsx, .xls)", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader(
+    "Upload Excel QA Report (.xlsx, .xls)",
+    type=["xlsx", "xls"],
+    key=f"uploader_{st.session_state.uploader_key}"
+)
 
-if uploaded_file is not None:
+if uploaded_file is not None and st.session_state.parsed_agents is None:
     try:
         parsed_data = parse_excel_report(uploaded_file)
         st.session_state.parsed_agents = parsed_data
         
         total_agents = len(parsed_data)
         total_calls = sum(len(calls) for calls in parsed_data.values())
-        
         st.success(f"Report Loaded: **{total_calls} calls** across **{total_agents} agents**.")
-        
-        with st.expander("📊 View Parsed Agents Summary Table", expanded=False):
-            summary_rows = []
-            for agent, calls in parsed_data.items():
-                scores = [c["qa_score"] for c in calls]
-                avg_score = round(sum(scores) / len(scores)) if scores else 0
-                fails_count = sum(len(c["missed_areas"]) for c in calls)
-                summary_rows.append({
-                    "Agent Name": agent,
-                    "First Name": extract_first_name(agent),
-                    "Calls Audited": len(calls),
-                    "Average QA Score": f"{avg_score}%",
-                    "Missed Areas": fails_count,
-                    "All 100%": "✅ Yes" if avg_score >= 100 and fails_count == 0 else "❌ No"
-                })
-            st.dataframe(summary_rows, use_container_width=True)
-
     except Exception as e:
         st.error(f"Error parsing Excel file: {e}")
+
+if st.session_state.parsed_agents:
+    with st.expander("📊 View Parsed Agents Summary Table", expanded=False):
+        summary_rows = []
+        for agent, calls in st.session_state.parsed_agents.items():
+            scores = [c["qa_score"] for c in calls]
+            avg_score = round(sum(scores) / len(scores)) if scores else 0
+            fails_count = sum(len(c["missed_areas"]) for c in calls)
+            summary_rows.append({
+                "Agent Name": agent,
+                "First Name": extract_first_name(agent),
+                "Calls Audited": len(calls),
+                "Average QA Score": f"{avg_score}%",
+                "Missed Areas": fails_count,
+                "All 100%": "✅ Yes" if avg_score >= 100 and fails_count == 0 else "❌ No"
+            })
+        st.dataframe(summary_rows, use_container_width=True)
 
 st.divider()
 
@@ -150,7 +187,7 @@ if st.session_state.parsed_agents:
             
             for idx, agent in enumerate(agents_list):
                 calls = st.session_state.parsed_agents[agent]
-                status_box.info(f"Generating for {agent} ({idx + 1}/{total_agents})...")
+                status_box.info(f"Processing agent {idx + 1} of {total_agents}: **{agent}**...")
                 
                 email_text, model, prov = build_feedback_email_for_agent(
                     agent_name=agent,
@@ -159,7 +196,7 @@ if st.session_state.parsed_agents:
                     custom_rules=custom_r,
                     openrouter_key=or_k,
                     groq_key=gr_k,
-                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents}: {msg}")
+                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents} ({agent}): {msg}")
                 )
                 
                 st.session_state.generated_emails[agent] = {
@@ -192,13 +229,11 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     scores = [c["qa_score"] for c in agent_calls]
     avg_s = round(sum(scores) / len(scores)) if scores else 0
 
-    # Header Card
     hdr1, hdr2 = st.columns([3, 1])
     with hdr1:
         st.markdown(f"### **Agent ({curr_idx + 1} of {num_agents}): {current_agent}**")
         st.caption(f"Audited Calls: {len(agent_calls)} | Average QA Score: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
     
-    # Text Area
     edited_email = st.text_area(
         label="Feedback Email Draft (Editable)",
         value=agent_record["email"],
@@ -207,7 +242,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     )
     st.session_state.generated_emails[current_agent]["email"] = edited_email
     
-    # Navigation Buttons (Back & Next)
     b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
     
     with b_col1:
@@ -222,7 +256,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             
     with b_col3:
         st.download_button(
-            label=f"💾 Download This Email",
+            label="💾 Download This Email",
             data=edited_email,
             file_name=f"Feedback_{extract_first_name(current_agent)}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
@@ -230,7 +264,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         )
 
     with b_col4:
-        # Build consolidated text for all agents
         all_emails_export = []
         for a_name in agents:
             all_emails_export.append("=" * 60)
@@ -248,4 +281,5 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         )
 
 else:
-    st.info("Upload an Excel report above to begin generating emails.")
+    if not st.session_state.parsed_agents:
+        st.info("Upload an Excel report above to begin generating emails.")

@@ -45,12 +45,11 @@ def get_subject_line(week_setting: str) -> str:
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
     """
-    Renders 3 copy buttons. The 'Copy Email Body' button writes BOTH text/html and text/plain
-    so it pastes natively into Gmail and Outlook with bold headings and true indented bullets.
+    Renders 3 clean, unclipped copy buttons. Data is passed via isolated script variables
+    to guarantee zero quote collisions or text bleeding.
     """
     rich_html = convert_email_to_rich_html(email_body)
     
-    # JSON-serialize safely to prevent quote collisions in JavaScript
     json_name = json.dumps(first_name)
     json_subj = json.dumps(subject_line)
     json_body_plain = json.dumps(email_body)
@@ -58,20 +57,27 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
 
     html_code = f"""
     <style>
+        * {{
+            box-sizing: border-box;
+        }}
+        body {{
+            margin: 0;
+            padding: 2px 0 0 0;
+            background: transparent;
+            overflow: hidden;
+        }}
         .toolbar-wrap {{
             display: flex;
             gap: 8px;
             align-items: center;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             flex-wrap: nowrap;
-            margin: 0;
-            padding: 0;
         }}
         .c-btn {{
             background-color: #f0f2f6;
             color: #31333f;
             border: 1px solid #d6d6d8;
-            padding: 8px 12px;
+            padding: 7px 13px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
@@ -80,6 +86,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
             align-items: center;
             gap: 6px;
             white-space: nowrap;
+            height: 38px;
             transition: all 0.15s ease-in-out;
         }}
         .c-btn:hover {{
@@ -99,45 +106,48 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     </style>
 
     <div class="toolbar-wrap">
-        <button id="b_name_{key_suffix}" class="c-btn" onclick="copyText({json_name}, 'b_name_{key_suffix}', '👤 Copy Name: {first_name}')">
+        <button id="b_name" class="c-btn" onclick="copyName()">
             👤 Copy Name: {first_name}
         </button>
-        <button id="b_subj_{key_suffix}" class="c-btn" onclick="copyText({json_subj}, 'b_subj_{key_suffix}', '📌 Copy Subject')">
+        <button id="b_subj" class="c-btn" onclick="copySubject()">
             📌 Copy Subject
         </button>
-        <button id="b_body_{key_suffix}" class="c-btn c-btn-red" onclick="copyRichBody({json_body_html}, {json_body_plain}, 'b_body_{key_suffix}')">
-            ✉️ Copy Email Body (Rich Formatted)
+        <button id="b_body" class="c-btn c-btn-red" onclick="copyBody()">
+            ✉️ Copy Email Body
         </button>
     </div>
 
     <script>
-    function copyText(val, btnId, originalText) {{
-        if (navigator.clipboard && window.isSecureContext) {{
-            navigator.clipboard.writeText(val).then(() => showCheck(btnId, originalText))
-            .catch(() => execFallback(val, btnId, originalText));
-        }} else {{
-            execFallback(val, btnId, originalText);
-        }}
+    const nameVal = {json_name};
+    const subjVal = {json_subj};
+    const bodyPlain = {json_body_plain};
+    const bodyHtml = {json_body_html};
+
+    function copyName() {{
+        doCopyPlain(nameVal, 'b_name', '👤 Copy Name: {first_name}');
     }}
 
-    async function copyRichBody(htmlStr, plainStr, btnId) {{
-        // Write both text/html and text/plain to clipboard
+    function copySubject() {{
+        doCopyPlain(subjVal, 'b_subj', '📌 Copy Subject');
+    }}
+
+    async function copyBody() {{
         if (navigator.clipboard && window.ClipboardItem) {{
             try {{
-                const blobHtml = new Blob([htmlStr], {{ type: 'text/html' }});
-                const blobPlain = new Blob([plainStr], {{ type: 'text/plain' }});
+                const blobHtml = new Blob([bodyHtml], {{ type: 'text/html' }});
+                const blobPlain = new Blob([bodyPlain], {{ type: 'text/plain' }});
                 const item = new ClipboardItem({{ 'text/html': blobHtml, 'text/plain': blobPlain }});
                 await navigator.clipboard.write([item]);
-                showCheck(btnId, '✉️ Copy Email Body (Rich Formatted)');
+                showSuccess('b_body', '✉️ Copy Email Body');
                 return;
-            }} catch (e) {{
-                console.warn('ClipboardItem write failed, using fallback:', e);
+            }} catch (err) {{
+                console.warn('ClipboardItem failed:', err);
             }}
         }}
 
-        // Fallback for browsers with restricted ClipboardItem
+        // Fallback for rich text
         const container = document.createElement('div');
-        container.innerHTML = htmlStr;
+        container.innerHTML = bodyHtml;
         container.style.position = 'fixed';
         container.style.left = '-9999px';
         document.body.appendChild(container);
@@ -150,16 +160,25 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
 
         try {{
             document.execCommand('copy');
-            showCheck(btnId, '✉️ Copy Email Body (Rich Formatted)');
-        }} catch (err) {{
-            navigator.clipboard.writeText(plainStr);
-            showCheck(btnId, '✉️ Copy Email Body (Rich Formatted)');
+            showSuccess('b_body', '✉️ Copy Email Body');
+        }} catch (e) {{
+            navigator.clipboard.writeText(bodyPlain);
+            showSuccess('b_body', '✉️ Copy Email Body');
         }}
         sel.removeAllRanges();
         document.body.removeChild(container);
     }}
 
-    function execFallback(text, btnId, originalText) {{
+    function doCopyPlain(text, btnId, originalLabel) {{
+        if (navigator.clipboard && window.isSecureContext) {{
+            navigator.clipboard.writeText(text).then(() => showSuccess(btnId, originalLabel))
+            .catch(() => fallbackPlain(text, btnId, originalLabel));
+        }} else {{
+            fallbackPlain(text, btnId, originalLabel);
+        }}
+    }}
+
+    function fallbackPlain(text, btnId, originalLabel) {{
         const temp = document.createElement("textarea");
         temp.value = text;
         temp.style.position = "fixed";
@@ -169,17 +188,17 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
         temp.select();
         try {{
             document.execCommand('copy');
-            showCheck(btnId, originalText);
+            showSuccess(btnId, originalLabel);
         }} catch(e) {{
-            alert("Please copy manually.");
+            alert("Copy failed. Please copy manually.");
         }}
         document.body.removeChild(temp);
     }}
 
-    function showCheck(btnId, originalText) {{
+    function showSuccess(btnId, originalText) {{
         const btn = document.getElementById(btnId);
         if (btn) {{
-            btn.innerHTML = "✅ Copied with Formatting!";
+            btn.innerHTML = "✅ Copied!";
             btn.style.backgroundColor = "#28a745";
             btn.style.borderColor = "#28a745";
             btn.style.color = "#ffffff";
@@ -193,7 +212,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     }}
     </script>
     """
-    components.html(html_code, height=44)
+    components.html(html_code, height=50)
 
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
@@ -398,8 +417,8 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
 
     active_email_text = agent_record["email"]
 
-    # Unified Action Bar: Copy Toolbar + Previous/Next
-    bar_copy_col, bar_prev_col, bar_next_col = st.columns([4.2, 1, 1])
+    # ----------------- UNIFIED ACTION BAR: ZERO CLIPPING -----------------
+    bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
     
     with bar_copy_col:
         render_copy_toolbar(
@@ -419,7 +438,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             st.session_state.current_agent_idx += 1
             st.rerun()
 
-    # Editor & Live Preview Tabs
+    # ----------------- EDITOR & PREVIEW TABS -----------------
     tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Live Email Client Preview"])
     
     with tab_edit:
@@ -434,11 +453,10 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
 
     with tab_preview:
         st.markdown(f"**Subject:** `{subject_line}`")
-        # Render the rich HTML email container directly
         rendered_rich_html = convert_email_to_rich_html(active_email_text)
         st.markdown(rendered_rich_html, unsafe_allow_html=True)
 
-    # Download Buttons at Bottom
+    # ----------------- DOWNLOAD BUTTONS (BOTTOM) -----------------
     d_col1, d_col2 = st.columns(2)
     with d_col1:
         st.download_button(
@@ -446,27 +464,4 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             data=active_email_text,
             file_name=f"Feedback_{first_name_only}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
-            use_container_width=True
-        )
-
-    with d_col2:
-        all_emails_export = []
-        for a_name in agents:
-            all_emails_export.append("=" * 60)
-            all_emails_export.append(f"AGENT: {a_name}")
-            all_emails_export.append(f"SUBJECT: {subject_line}")
-            all_emails_export.append("=" * 60)
-            all_emails_export.append(st.session_state.generated_emails[a_name]["email"])
-            all_emails_export.append("\n\n")
-            
-        st.download_button(
-            label="📦 Download All Emails (.txt)",
-            data="\n".join(all_emails_export),
-            file_name=f"All_Feedback_Emails_{st.session_state.settings.get('current_week', 'Week')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
-
-else:
-    if not st.session_state.parsed_agents:
-        st.info("Upload an Excel report above to begin generating emails.")
+            use_container_width=Tr

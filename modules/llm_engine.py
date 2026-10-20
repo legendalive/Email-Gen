@@ -8,7 +8,7 @@ OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# Global state to remember winning models during a batch session
+# Global memory to remember winning models during a session
 _LAST_WORKING_MODEL: Optional[str] = None
 _LAST_WORKING_PROVIDER: Optional[str] = None
 _CACHED_OR_MODELS: List[str] = []
@@ -37,7 +37,7 @@ def get_live_groq_chat_models(api_key: str) -> List[str]:
             for m in data:
                 m_id = m.get("id", "")
                 lower = m_id.lower()
-                # Exclude non-chat endpoints (audio transcription, moderation, embeddings)
+                # Exclude non-chat endpoints
                 if any(bad in lower for bad in ["whisper", "guard", "embed", "moderation", "tts", "transcribe"]):
                     continue
                 if m.get("active", True) is False:
@@ -45,7 +45,6 @@ def get_live_groq_chat_models(api_key: str) -> List[str]:
                 chat_models.append(m_id)
 
             if chat_models:
-                # Rank from most capable (70b, versatile) to lightweight
                 def rank_groq(name: str) -> int:
                     score = 0
                     n = name.lower()
@@ -94,7 +93,6 @@ def fetch_openrouter_free_models(api_key: Optional[str] = None) -> List[str]:
                     str(pricing.get("completion", "1")) == "0"
                 )
                 if m_id.endswith(":free") or is_free or m_id == "openrouter/free":
-                    # Skip slow reasoning models that queue for minutes
                     if "r1" not in m_id.lower() and "reasoning" not in m_id.lower():
                         free_models.append(m_id)
 
@@ -165,12 +163,12 @@ def test_groq_connection(api_key: str) -> Tuple[bool, str, float]:
     key = api_key.strip()
     start = time.time()
 
-    # Step 1: Query Groq's models endpoint to verify key & list accessible models
+    # Step 1: Verify key & query accessible models
     try:
         m_res = requests.get(GROQ_MODELS_URL, headers={"Authorization": f"Bearer {key}"}, timeout=6)
         lat = round(time.time() - start, 2)
         if m_res.status_code == 401:
-            return False, "Unauthorized (401): Invalid Groq API Key. Please verify key from console.groq.com.", lat
+            return False, "Unauthorized (401): Invalid Groq API Key. Verify from console.groq.com.", lat
         if m_res.status_code != 200:
             err_msg = m_res.json().get("error", {}).get("message", m_res.text)
             return False, f"Groq Error ({m_res.status_code}): {err_msg}", lat
@@ -182,7 +180,7 @@ def test_groq_connection(api_key: str) -> Tuple[bool, str, float]:
     if not models:
         return False, "No active chat models were returned by Groq for this account.", round(time.time() - start, 2)
 
-    # Step 3: Cycle through the live models starting with the best available
+    # Step 3: Cycle through live models starting with best available
     last_err = ""
     for model in models:
         try:
@@ -197,7 +195,6 @@ def test_groq_connection(api_key: str) -> Tuple[bool, str, float]:
                 return True, f"{model} (Selected from {len(models)} live Groq models)", lat
             else:
                 last_err = res.json().get("error", {}).get("message", f"HTTP {res.status_code}")
-                # If 404 or decommissioned, seamlessly try the next model
                 continue
         except Exception as e:
             last_err = str(e)
@@ -244,4 +241,54 @@ def call_llm_resilient(
                 res = requests.post(
                     GROQ_CHAT_URL,
                     headers={"Authorization": f"Bearer {groq_key.strip()}", "Content-Type": "application/json"},
-                    json={"model": _LA
+                    json={"model": _LAST_WORKING_MODEL, "messages": messages, "temperature": 0.2},
+                    timeout=6
+                )
+                if res.status_code == 200:
+                    return res.json()["choices"][0]["message"]["content"].strip(), _LAST_WORKING_MODEL, "Groq"
+        except Exception:
+            pass
+
+    # --- 2. DYNAMIC OPENROUTER FREE POOL SCAN ---
+    if openrouter_key:
+        or_models = fetch_openrouter_free_models(openrouter_key.strip())
+        for model in or_models:
+            if status_callback:
+                status_callback(f"Trying OpenRouter: {model}...")
+            try:
+                res = requests.post(
+                    OPENROUTER_CHAT_URL,
+                    headers={"Authorization": f"Bearer {openrouter_key.strip()}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": messages, "temperature": 0.2},
+                    timeout=8
+                )
+                if res.status_code == 200:
+                    content = res.json()["choices"][0]["message"]["content"].strip()
+                    _LAST_WORKING_MODEL = model
+                    _LAST_WORKING_PROVIDER = "OpenRouter"
+                    return content, model, "OpenRouter"
+            except Exception:
+                continue
+
+    # --- 3. DYNAMIC GROQ LIVE POOL SCAN ---
+    if groq_key:
+        groq_models = get_live_groq_chat_models(groq_key.strip())
+        for model in groq_models:
+            if status_callback:
+                status_callback(f"Cascading to Groq: {model}...")
+            try:
+                res = requests.post(
+                    GROQ_CHAT_URL,
+                    headers={"Authorization": f"Bearer {groq_key.strip()}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": messages, "temperature": 0.2},
+                    timeout=6
+                )
+                if res.status_code == 200:
+                    content = res.json()["choices"][0]["message"]["content"].strip()
+                    _LAST_WORKING_MODEL = model
+                    _LAST_WORKING_PROVIDER = "Groq"
+                    return content, model, "Groq"
+            except Exception:
+                continue
+
+    raise RuntimeError("All dynamic models across OpenRouter and Groq were attempted without success.")

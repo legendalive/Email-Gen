@@ -59,7 +59,7 @@ def convert_email_to_rich_html(plain_text: str) -> str:
         if not para:
             continue
 
-        # Detect call headers like [0790144494 and 85%]
+        # Detect call headers like [116205498 95%]
         if para.startswith("[") and "]" in para:
             lines = para.split("\n")
             header = lines[0].strip()
@@ -101,7 +101,7 @@ def build_feedback_email_for_agent(
 ) -> Tuple[str, str, str]:
     """
     Deterministic Structural Assembler:
-    Guarantees true headings, true bullets, exact spacing, and zero verbosity.
+    Enforces format: [Calling_Number Score%] (number, space, score).
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
@@ -132,7 +132,8 @@ def build_feedback_email_for_agent(
         score_val = call.get("qa_score", 0)
         missed = call.get("missed_areas", [])
 
-        call_header = f"[{phone_num} and {int(score_val) if score_val.is_integer() else score_val}%]"
+        # Formatted as: [Calling_Number Score%] (number, space, score - e.g. [116205498 95%])
+        call_header = f"[{phone_num} {int(score_val) if score_val.is_integer() else score_val}%]"
 
         if score_val >= 100 and not missed:
             call_content = f"{call_header}\nYou scored 100% in this call. Good job"

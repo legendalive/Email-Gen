@@ -43,8 +43,7 @@ def get_subject_line(week_setting: str) -> str:
     return f"Coaching session for week {week_num}"
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """Renders 3 independent copy buttons via hidden DOM textareas to prevent string collisions."""
-    # Escape any HTML special characters for the hidden textareas
+    """Renders 3 independent copy buttons using isolated hidden textareas."""
     safe_first_name = first_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_subject = subject_line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_body = email_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -89,7 +88,6 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
         }}
     </style>
 
-    <!-- Hidden text sources ensuring 100% accurate separation -->
     <textarea id="src_name_{key_suffix}" style="display:none;">{safe_first_name}</textarea>
     <textarea id="src_subj_{key_suffix}" style="display:none;">{safe_subject}</textarea>
     <textarea id="src_body_{key_suffix}" style="display:none;">{safe_body}</textarea>
@@ -98,7 +96,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
         <button id="b_name_{key_suffix}" class="c-btn" onclick="copyFromArea('src_name_{key_suffix}', 'b_name_{key_suffix}', '👤 Copy First Name: {safe_first_name}')">
             👤 Copy First Name: {safe_first_name}
         </button>
-        <button id="b_subj_{key_suffix}" class="c-btn" onclick="copyFromArea('src_subj_{key_suffix}', 'b_subj_{key_suffix}', '📌 Copy Subject: {safe_subject}')">
+        <button id="b_subj_{key_suffix}" class="c-btn" onclick="copyFromArea('src_subj_{key_suffix}', 'b_subj_{key_suffix}', '📌 Copy Subject')">
             📌 Copy Subject
         </button>
         <button id="b_body_{key_suffix}" class="c-btn c-btn-red" onclick="copyFromArea('src_body_{key_suffix}', 'b_body_{key_suffix}', '✉️ Copy Email Body')">
@@ -175,14 +173,14 @@ with st.sidebar:
             else:
                 st.error(f"Failed ({lat}s): {model_or_err}")
 
-    st.subheader("⚡ Groq (Ultra-Fast Fallback)")
+    st.subheader("⚡ Groq (Fallback)")
     groq_key = st.text_input(
         "Groq API Key",
         value=st.session_state.settings.get("groq_api_key", ""),
         type="password"
     )
     if st.button("⚡ Test Groq", use_container_width=True):
-        with st.spinner("Testing Groq API..."):
+        with st.spinner("Pinging Groq server..."):
             ok, model_or_err, lat = test_groq_connection(groq_key.strip())
             if ok:
                 st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
@@ -304,7 +302,7 @@ if st.session_state.parsed_agents:
             
             for idx, agent in enumerate(agents_list):
                 calls = st.session_state.parsed_agents[agent]
-                status_box.info(f"Generating for {agent} ({idx + 1}/{total_agents})...")
+                status_box.info(f"Processing agent {idx + 1} of {total_agents}: **{agent}**...")
                 
                 email_text, model, prov = build_feedback_email_for_agent(
                     agent_name=agent,
@@ -348,39 +346,78 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     avg_s = round(sum(scores) / len(scores)) if scores else 0
     subject_line = get_subject_line(st.session_state.settings.get("current_week", "Week 30"))
 
-    # Agent Identity Card with disambiguation box
+    # Top info line
     top_c1, top_c2 = st.columns([3, 2])
     with top_c1:
         st.markdown(f"### **Agent {curr_idx + 1} of {num_agents}: {first_name_only}**")
-        st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
+        st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}`")
     with top_c2:
         st.info(f"🏷️ **Full Agent Identity:** `{current_agent}`")
 
-    # Copy Toolbar (First name only, subject, body)
+    # Current email text
+    active_email_text = agent_record["email"]
+
+    # Copy Toolbar
     render_copy_toolbar(
         first_name=first_name_only,
         subject_line=subject_line,
-        email_body=agent_record["email"],
+        email_body=active_email_text,
         key_suffix=curr_idx
     )
     
-    # Formatted Preview & Editor Tabs
+    # Editor & Live Formatted Preview Tabs
     tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Formatted Preview (Headings & Bullets)"])
     
     with tab_edit:
         edited_email = st.text_area(
             label=f"Subject: {subject_line}",
-            value=agent_record["email"],
-            height=300,
-            key=f"editor_{curr_idx}"
+            value=active_email_text,
+            height=320,
+            key=f"editor_box_{curr_idx}"
         )
+        # Keep state updated with user edits
         st.session_state.generated_emails[current_agent]["email"] = edited_email
+        active_email_text = edited_email
 
     with tab_preview:
-        # Renders headings and bullet points formatted as they will appear
-        preview_md = edited_email.replace("\n", "\n\n")
+        # Render a live formatted email preview container
         st.markdown(f"**Subject:** `{subject_line}`")
-        st.markdown(edited_email)
+        
+        # Build HTML card representation
+        preview_html = ["<div style='background: #ffffff; padding: 22px; border-radius: 8px; border: 1px solid #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #1e293b;'>"]
+        
+        paragraphs = active_email_text.split("\n\n")
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            
+            # Check if this paragraph contains a call header like [0790144494 and 85%]
+            if para.startswith("[") and "]" in para:
+                lines = para.split("\n")
+                header = lines[0].strip()
+                preview_html.append(f"<div style='font-weight: 700; font-size: 15px; color: #0f172a; margin-top: 14px; margin-bottom: 6px; padding: 4px 8px; background: #f8fafc; border-left: 3px solid #3b82f6;'>{header}</div>")
+                
+                rest = lines[1:]
+                bullets = [l for l in rest if l.strip().startswith("•")]
+                non_bullets = [l for l in rest if not l.strip().startswith("•")]
+                
+                for nb in non_bullets:
+                    if nb.strip():
+                        preview_html.append(f"<p style='margin: 4px 0 8px 0; color: #334155;'>{nb.strip()}</p>")
+                
+                if bullets:
+                    preview_html.append("<ul style='margin: 4px 0 10px 20px; padding: 0;'>")
+                    for b in bullets:
+                        item_text = b.strip().lstrip("•").strip()
+                        preview_html.append(f"<li style='margin-bottom: 4px; color: #334155;'>{item_text}</li>")
+                    preview_html.append("</ul>")
+            else:
+                # Regular paragraph (Dear..., Summary sentence, Closing line)
+                preview_html.append(f"<p style='margin: 0 0 12px 0;'>{para}</p>")
+
+        preview_html.append("</div>")
+        st.markdown("\n".join(preview_html), unsafe_allow_html=True)
 
     # Navigation Buttons
     b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
@@ -398,7 +435,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     with b_col3:
         st.download_button(
             label="💾 Download This Email",
-            data=edited_email,
+            data=active_email_text,
             file_name=f"Feedback_{first_name_only}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
             use_container_width=True

@@ -2,28 +2,41 @@ import re
 from typing import Dict, List, Any, Tuple
 from modules.anonymizer import (
     extract_first_name,
-    create_anonymized_payload,
-    restore_pii
+    scrub_sensitive_text
 )
 from modules.llm_engine import call_llm_resilient
 
-def clean_formatted_bullets(text: str) -> str:
-    """Standardizes bullet points into true unicode bullets (• ) with clean indentation."""
-    lines = text.split("\n")
-    cleaned_lines = []
-    for line in lines:
-        stripped = line.strip()
-        # Convert asterisk, dash, or number bullets to true unicode bullet
-        if re.match(r"^[-*•]\s+", stripped) or re.match(r"^\d+\.\s+", stripped):
-            clean_item = re.sub(r"^[-*•\d.]+\s*", "", stripped)
-            cleaned_lines.append(f"• {clean_item}")
-        else:
-            cleaned_lines.append(line)
-    
-    # Ensure double line breaks between paragraphs
-    joined = "\n".join(cleaned_lines)
-    joined = re.sub(r"\n{3,}", "\n\n", joined)
-    return joined.strip()
+def summarize_missed_area_with_ai(
+    category: str,
+    raw_reason: str,
+    custom_rules: str,
+    openrouter_key: str,
+    groq_key: str
+) -> str:
+    """Uses LLM to summarize a missed area into a single concise sentence describing what went wrong."""
+    clean_cat = scrub_sensitive_text(category)
+    clean_reason = scrub_sensitive_text(raw_reason)
+
+    # If the comment is already very brief and direct, use it without overhead
+    if len(clean_reason.split()) <= 8 and "failed" not in clean_reason.lower():
+        return f"{clean_cat}: {clean_reason}"
+
+    sys_prompt = (
+        "You are a strict QA coach. Summarize what the agent did wrong into a single concise phrase. "
+        "Do not write greetings, pleasantries, or preamble. Aim for 0 verbosity. "
+        "Never mention company names or customer names."
+    )
+    if custom_rules:
+        sys_prompt += f"\nSupplementary rules: {custom_rules}"
+
+    user_prompt = f"Category: {clean_cat}\nReviewer notes: {clean_reason}\nWhat did the agent do wrong?"
+    try:
+        summary, _, _ = call_llm_resilient(sys_prompt, user_prompt, openrouter_key, groq_key)
+        # Clean any trailing punctuation or extra quotes
+        summary = summary.replace('"', '').replace("'", "").strip()
+        return f"{clean_cat}: {summary}"
+    except Exception:
+        return f"{clean_cat}: {clean_reason}"
 
 def build_feedback_email_for_agent(
     agent_name: str,
@@ -34,14 +47,18 @@ def build_feedback_email_for_agent(
     groq_key: str,
     status_callback=None
 ) -> Tuple[str, str, str]:
-    """Generates strictly formatted QA feedback emails with true headings and bullets."""
+    """
+    Deterministic Structural Assembler:
+    Guarantees true headings, true unicode bullets, exact paragraph spacing,
+    and 100% adherence to rules without relying on LLM to format lines.
+    """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
     scores = [c["qa_score"] for c in calls]
     avg_score = round(sum(scores) / len(scores)) if scores else 0
     all_100 = all(c["qa_score"] >= 100 and len(c.get("missed_areas", [])) == 0 for c in calls)
 
-    # Hardcoded Fast-Path: 100% in all calls
+    # 1. SPECIAL CASE: All calls 100%
     if all_100:
         email = (
             f"Dear {first_name}\n\n"
@@ -49,63 +66,50 @@ def build_feedback_email_for_agent(
         )
         return email, "Deterministic Rule", "Internal"
 
-    # Zero-PII Payload
-    agent_token, anon_calls, token_map = create_anonymized_payload(agent_name, calls)
+    # 2. Standard Structural Build
+    email_blocks = []
+    email_blocks.append(f"Dear {first_name}")
+    
+    verb = "was" if total_calls == 1 else "were"
+    call_word = "call" if total_calls == 1 else "calls"
+    email_blocks.append(f"In {week}, {total_calls} of your {call_word} {verb} audited averaging {avg_score}%. Below are the missed areas;")
 
-    system_prompt = (
-        "You are an automated Quality Assurance email writer.\n"
-        "Generate direct, strictly formatted feedback emails following these exact layout rules.\n\n"
-        "FORMATTING RULES:\n"
-        "1. ZERO verbosity. No pleasantries beyond 'Dear [Name]', no sign-offs, no signatures.\n"
-        "2. Structure MUST strictly match this template:\n\n"
-        f"Dear {agent_token}\n\n"
-        f"In {week}, {total_calls} of your calls {'was' if total_calls == 1 else 'were'} audited averaging {avg_score}%. Below are the missed areas;\n\n"
-        "For each call that had missed areas:\n"
-        "[Calling Number and score]\n"
-        "• State clearly and concisely what was done wrong\n"
-        "• State clearly and concisely what was done wrong\n\n"
-        "If a specific call scored 100%, write exactly:\n"
-        "[Calling Number and 100%]\n"
-        "You scored 100% in this call. Good job\n\n"
-        "End with this exact sentence:\n"
-        "Please work on the highlighted areas. I have attached the audited call for your reference.\n\n"
-        "3. Use true bullet points (• ) for missed areas. Never use numbers, dashes, or asterisks.\n"
-        "4. Never mention company names, reviewer names, or email addresses."
-    )
+    has_any_missed_area = False
+    models_used = set()
 
-    if custom_rules and custom_rules.strip():
-        system_prompt += f"\n\nSUPPLEMENTARY INSTRUCTIONS:\n{custom_rules.strip()}"
+    for idx, call in enumerate(calls, start=1):
+        phone_num = str(call.get("phone", f"Call #{idx}")).strip()
+        score_val = call.get("qa_score", 0)
+        missed = call.get("missed_areas", [])
 
-    user_prompt_lines = [
-        f"Generate the feedback email for {agent_token}.",
-        f"Target Scope: {week}",
-        f"Total calls: {total_calls}",
-        f"Average QA Score: {avg_score}%\n",
-        "Audited Calls Data:"
-    ]
+        # Heading format: [Calling Number and score]
+        call_header = f"[{phone_num} and {int(score_val) if score_val.is_integer() else score_val}%]"
 
-    for c in anon_calls:
-        phone_tok = c["phone_token"]
-        score_val = c["qa_score"]
-        user_prompt_lines.append(f"\nCall: [{phone_tok} and {score_val}%]")
-        if c["is_100"] and not c["missed_areas"]:
-            user_prompt_lines.append("- Score: 100% (No missed areas)")
+        if score_val >= 100 and not missed:
+            call_content = f"{call_header}\nYou scored 100% in this call. Good job"
+            email_blocks.append(call_content)
         else:
-            for item in c["missed_areas"]:
-                user_prompt_lines.append(f"- Category: {item['category']} | Reason: {item['reason']}")
+            has_any_missed_area = True
+            bullet_lines = [call_header]
+            for item in missed:
+                cat = item.get("category", "")
+                reason = item.get("reason", "")
+                
+                # Polish the missed point
+                bullet_desc = summarize_missed_area_with_ai(
+                    category=cat,
+                    raw_reason=reason,
+                    custom_rules=custom_rules,
+                    openrouter_key=openrouter_key,
+                    groq_key=groq_key
+                )
+                bullet_lines.append(f"• {bullet_desc}")
+                
+            email_blocks.append("\n".join(bullet_lines))
 
-    user_prompt = "\n".join(user_prompt_lines)
+    # Closing statement
+    if has_any_missed_area:
+        email_blocks.append("Please work on the highlighted areas. I have attached the audited call for your reference.")
 
-    raw_response, model_used, provider = call_llm_resilient(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        openrouter_key=openrouter_key,
-        groq_key=groq_key,
-        status_callback=status_callback
-    )
-
-    # Re-insert real agent name & calling numbers
-    restored_email = restore_pii(raw_response, token_map)
-    final_email = clean_formatted_bullets(restored_email)
-
-    return final_email, model_used, provider
+    final_email = "\n\n".join(email_blocks)
+    return final_email, "Hybrid Engine (Deterministic + LLM)", "OpenRouter/Groq"

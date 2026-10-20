@@ -15,7 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize Session State
 if "settings" not in st.session_state:
     st.session_state.settings = config.load_settings()
 
@@ -44,10 +43,6 @@ def get_subject_line(week_setting: str) -> str:
     return f"Coaching session for week {week_num}"
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """
-    Renders 3 clean, unclipped copy buttons. Data is passed via isolated script variables
-    to guarantee zero quote collisions or text bleeding.
-    """
     rich_html = convert_email_to_rich_html(email_body)
     
     json_name = json.dumps(first_name)
@@ -57,9 +52,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
 
     html_code = f"""
     <style>
-        * {{
-            box-sizing: border-box;
-        }}
+        * {{ box-sizing: border-box; }}
         body {{
             margin: 0;
             padding: 2px 0 0 0;
@@ -145,7 +138,6 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
             }}
         }}
 
-        // Fallback for rich text
         const container = document.createElement('div');
         container.innerHTML = bodyHtml;
         container.style.position = 'fixed';
@@ -198,7 +190,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     function showSuccess(btnId, originalText) {{
         const btn = document.getElementById(btnId);
         if (btn) {{
-            btn.innerHTML = "✅ Copied!";
+            btn.innerHTML = "✅ Copied with Formatting!";
             btn.style.backgroundColor = "#28a745";
             btn.style.borderColor = "#28a745";
             btn.style.color = "#ffffff";
@@ -328,7 +320,7 @@ if st.session_state.parsed_agents:
         for agent in sorted(st.session_state.parsed_agents.keys(), key=lambda x: x.strip().lower()):
             calls = st.session_state.parsed_agents[agent]
             scores = [c["qa_score"] for c in calls]
-            avg_score = round(sum(scores) / len(scores)) if scores else 0
+            avg_score = round(sum(scores) / len(scores), 1) if scores else 0
             fails_count = sum(len(c["missed_areas"]) for c in calls)
             summary_rows.append({
                 "Agent Name": agent,
@@ -382,7 +374,7 @@ if st.session_state.parsed_agents:
                 }
                 progress_bar.progress((idx + 1) / total_agents)
             
-            status_box.success("🎉 All emails generated successfully in alphabetical order!")
+            status_box.success("🎉 All emails generated successfully in formal nested format!")
 
 # 3. EMAIL REVIEW & NAVIGATION (ALPHABETICAL)
 if st.session_state.generated_emails and st.session_state.parsed_agents:
@@ -404,7 +396,8 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     agent_calls = st.session_state.parsed_agents[current_agent]
     
     scores = [c["qa_score"] for c in agent_calls]
-    avg_s = round(sum(scores) / len(scores)) if scores else 0
+    raw_avg = sum(scores) / len(scores) if scores else 0
+    avg_s = f"{int(raw_avg)}" if raw_avg.is_integer() else f"{round(raw_avg, 1)}"
     subject_line = get_subject_line(st.session_state.settings.get("current_week", "Week 30"))
 
     # Top info line
@@ -417,7 +410,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
 
     active_email_text = agent_record["email"]
 
-    # ----------------- UNIFIED ACTION BAR -----------------
+    # Action Bar: Copy Toolbar + Previous/Next
     bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
     
     with bar_copy_col:
@@ -438,7 +431,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             st.session_state.current_agent_idx += 1
             st.rerun()
 
-    # ----------------- EDITOR & PREVIEW TABS -----------------
+    # Editor & Live Preview Tabs
     tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Live Email Client Preview"])
     
     with tab_edit:
@@ -456,7 +449,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         rendered_rich_html = convert_email_to_rich_html(active_email_text)
         st.markdown(rendered_rich_html, unsafe_allow_html=True)
 
-    # ----------------- DOWNLOAD BUTTONS (BOTTOM) -----------------
+    # Download Buttons at Bottom
     week_suffix = st.session_state.settings.get("current_week", "Week").replace(" ", "_")
     single_filename = f"Feedback_{first_name_only}_{week_suffix}.txt"
     batch_filename = f"All_Feedback_Emails_{week_suffix}.txt"

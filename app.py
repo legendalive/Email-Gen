@@ -43,7 +43,7 @@ def get_subject_line(week_setting: str) -> str:
     return f"Coaching session for week {week_num}"
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """Renders 3 independent copy buttons using isolated hidden textareas."""
+    """Renders 3 copy buttons in a compact row."""
     safe_first_name = first_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_subject = subject_line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_body = email_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -52,17 +52,18 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     <style>
         .toolbar-wrap {{
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            flex-wrap: wrap;
-            margin: 4px 0 10px 0;
+            flex-wrap: nowrap;
+            margin: 0;
+            padding: 0;
         }}
         .c-btn {{
             background-color: #f0f2f6;
             color: #31333f;
             border: 1px solid #d6d6d8;
-            padding: 8px 14px;
+            padding: 8px 12px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
@@ -70,6 +71,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
             display: inline-flex;
             align-items: center;
             gap: 6px;
+            white-space: nowrap;
             transition: all 0.15s ease-in-out;
         }}
         .c-btn:hover {{
@@ -93,8 +95,8 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     <textarea id="src_body_{key_suffix}" style="display:none;">{safe_body}</textarea>
 
     <div class="toolbar-wrap">
-        <button id="b_name_{key_suffix}" class="c-btn" onclick="copyFromArea('src_name_{key_suffix}', 'b_name_{key_suffix}', '👤 Copy First Name: {safe_first_name}')">
-            👤 Copy First Name: {safe_first_name}
+        <button id="b_name_{key_suffix}" class="c-btn" onclick="copyFromArea('src_name_{key_suffix}', 'b_name_{key_suffix}', '👤 Copy Name: {safe_first_name}')">
+            👤 Copy Name: {safe_first_name}
         </button>
         <button id="b_subj_{key_suffix}" class="c-btn" onclick="copyFromArea('src_subj_{key_suffix}', 'b_subj_{key_suffix}', '📌 Copy Subject')">
             📌 Copy Subject
@@ -152,7 +154,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     }}
     </script>
     """
-    components.html(html_code, height=52)
+    components.html(html_code, height=44)
 
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
@@ -265,7 +267,6 @@ if uploaded_file is not None and st.session_state.parsed_agents is None:
 if st.session_state.parsed_agents:
     with st.expander("📊 View Parsed Agents Summary Table (Alphabetical)", expanded=False):
         summary_rows = []
-        # Strictly alphabetical iteration
         for agent in sorted(st.session_state.parsed_agents.keys(), key=lambda x: x.strip().lower()):
             calls = st.session_state.parsed_agents[agent]
             scores = [c["qa_score"] for c in calls]
@@ -287,7 +288,6 @@ st.divider()
 st.subheader("🚀 2. Email Generation")
 
 if st.session_state.parsed_agents:
-    # Strictly alphabetical list of agents
     agents_list = sorted(list(st.session_state.parsed_agents.keys()), key=lambda x: x.strip().lower())
     total_agents = len(agents_list)
     
@@ -331,7 +331,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     st.divider()
     st.subheader("📨 3. Review Generated Feedback Emails")
     
-    # Strictly sorted alphabetically (A-Z)
     agents = sorted(list(st.session_state.generated_emails.keys()), key=lambda x: x.strip().lower())
     num_agents = len(agents)
     
@@ -360,15 +359,29 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
 
     active_email_text = agent_record["email"]
 
-    # Copy Toolbar
-    render_copy_toolbar(
-        first_name=first_name_only,
-        subject_line=subject_line,
-        email_body=active_email_text,
-        key_suffix=curr_idx
-    )
+    # ----------------- UNIFIED ACTION BAR: COPY + NAVIGATION -----------------
+    # Copy buttons and Previous / Next in one single row
+    bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
     
-    # Editor & Live Formatted Preview Tabs
+    with bar_copy_col:
+        render_copy_toolbar(
+            first_name=first_name_only,
+            subject_line=subject_line,
+            email_body=active_email_text,
+            key_suffix=curr_idx
+        )
+        
+    with bar_prev_col:
+        if st.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
+            st.session_state.current_agent_idx -= 1
+            st.rerun()
+            
+    with bar_next_col:
+        if st.button("Next ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True, type="primary"):
+            st.session_state.current_agent_idx += 1
+            st.rerun()
+
+    # ----------------- EDITOR & PREVIEW TABS -----------------
     tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Formatted Preview (Headings & Bullets)"])
     
     with tab_edit:
@@ -416,29 +429,18 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         preview_html.append("</div>")
         st.markdown("\n".join(preview_html), unsafe_allow_html=True)
 
-    # Navigation Buttons (Alphabetical Next/Back)
-    b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
-    
-    with b_col1:
-        if st.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
-            st.session_state.current_agent_idx -= 1
-            st.rerun()
-            
-    with b_col2:
-        if st.button("Next ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True):
-            st.session_state.current_agent_idx += 1
-            st.rerun()
-            
-    with b_col3:
+    # ----------------- DOWNLOAD BUTTONS (BOTTOM) -----------------
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
         st.download_button(
-            label="💾 Download This Email",
+            label=f"💾 Download {first_name_only}'s Email (.txt)",
             data=active_email_text,
             file_name=f"Feedback_{first_name_only}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
             use_container_width=True
         )
 
-    with b_col4:
+    with d_col2:
         all_emails_export = []
         for a_name in agents:
             all_emails_export.append("=" * 60)

@@ -1,6 +1,12 @@
 import streamlit as st
 import config
 from modules.llm_engine import call_llm_resilient
+from modules.anonymizer import (
+    extract_first_name,
+    scrub_sensitive_text,
+    create_anonymized_payload,
+    restore_pii
+)
 
 st.set_page_config(
     page_title="QA Email Generator",
@@ -104,33 +110,73 @@ with col3:
 
 st.divider()
 
-# --- DIAGNOSTIC TOOL: Test LLM Fallback Engine ---
-st.subheader("🧪 Test AI Engine Connection & Fallback")
-st.caption("Verify that your API keys connect and dynamic free model selection succeeds.")
+# --- DIAGNOSTICS & VERIFICATION ---
+tab1, tab2 = st.tabs(["🔒 Privacy & Zero-PII Test", "🧪 LLM Connection Test"])
 
-if st.button("Run Connection Test"):
-    or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
-    gr_k = st.session_state.settings.get("groq_api_key", "").strip()
+with tab1:
+    st.subheader("Zero-PII Sanitization & Desanitization Demo")
+    st.caption("Demonstrates how data is stripped of PII before the AI sees it, then re-inserted afterwards.")
     
-    if not or_k and not gr_k:
-        st.warning("Please save at least one API key in the sidebar before testing.")
-    else:
-        status_box = st.empty()
-        with st.spinner("Discovering best available free model..."):
-            try:
-                response_text, model_used, provider = call_llm_resilient(
-                    system_prompt="You are a system diagnostic tester. Respond with only one word: 'CONNECTED'.",
-                    user_prompt="Ping",
-                    openrouter_key=or_k,
-                    groq_key=gr_k,
-                    status_callback=lambda msg: status_box.info(msg)
-                )
-                status_box.empty()
-                st.success(f"Connection Successful! Responded via **{provider}** using model: `{model_used}`")
-            except Exception as e:
-                status_box.empty()
-                st.error(f"Test Failed: {str(e)}")
+    test_agent = "BRIAN KEYA"
+    test_calls = [
+        {
+            "phone": "0790144494",
+            "qa_score": 85,
+            "missed_areas": [
+                {"category": "Identification & KYC", "reason": "Did not ask customer to confirm registered M-KOPA mobile number."}
+            ]
+        }
+    ]
+    
+    if st.button("Run Privacy Pipeline Simulation"):
+        agent_tok, anon_calls, token_map = create_anonymized_payload(test_agent, test_calls)
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 1. What the AI Sees (Zero PII)")
+            st.json({
+                "agent_greeting_token": agent_tok,
+                "anonymized_calls": anon_calls
+            })
+            st.success("Notice: Real name, phone number, and 'M-KOPA' are completely removed.")
+            
+        with c2:
+            st.markdown("#### 2. Local Re-insertion (What You See)")
+            simulated_ai_output = (
+                f"Dear {agent_tok}\n\n"
+                f"In Week 30, 1 of your calls was audited averaging 85%. Below are the missed areas;\n\n"
+                f"[{anon_calls[0]['phone_token']} and 85%]\n"
+                f"- Identification & KYC: Did not confirm registered mobile number.\n\n"
+                f"Please work on the highlighted areas. I have attached the audited call for your reference."
+            )
+            final_email = restore_pii(simulated_ai_output, token_map)
+            st.text_area("Final Restored Email", value=final_email, height=180)
+            st.info("Notice: First name ('Brian') and phone number are safely restored locally.")
+
+with tab2:
+    st.subheader("Test AI Engine Connection")
+    if st.button("Run Connection Ping"):
+        or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
+        gr_k = st.session_state.settings.get("groq_api_key", "").strip()
+        if not or_k and not gr_k:
+            st.warning("Please save at least one API key in the sidebar.")
+        else:
+            status_box = st.empty()
+            with st.spinner("Pinging resilient model pool..."):
+                try:
+                    resp, model, provider = call_llm_resilient(
+                        system_prompt="Respond with: CONNECTED",
+                        user_prompt="Ping",
+                        openrouter_key=or_k,
+                        groq_key=gr_k,
+                        status_callback=lambda msg: status_box.info(msg)
+                    )
+                    status_box.empty()
+                    st.success(f"Connected to **{provider}** using model: `{model}`")
+                except Exception as e:
+                    status_box.empty()
+                    st.error(f"Error: {e}")
 
 st.divider()
 st.subheader("📂 Report Upload & Processing")
-st.info("Step 2 Ready. Next up in Step 3: Zero-PII Sanitization & Desanitization Pipeline.")
+st.info("Step 3 Ready. Next up in Step 4: Excel Ingestion & Category Fail Extraction.")

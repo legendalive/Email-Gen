@@ -71,7 +71,6 @@ def clean_qa_score(val: Any) -> float:
     s = str(val).replace("%", "").strip()
     try:
         score = float(s)
-        # If represented as decimal (e.g., 0.85 instead of 85)
         if 0 < score <= 1.0:
             score = score * 100
         return round(score, 1)
@@ -84,16 +83,14 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
     - Ignores 'Total score', uses 'QA score'.
     - Groups rows by Agent Name.
     - Flags any rubric category with a 0 as a missed area.
-    - Gathers preceding/associated comments for reasons.
+    - Sorts all agents in strict alphabetical order (A-Z).
     """
     df = pd.read_excel(file_bytes)
-    
-    # Identify key columns
     cols = list(df.columns)
     
     agent_col = find_column(cols, ["name of customer care representative", "ccr) being scored", "agent name"])
     phone_col = find_column(cols, ["customer's phone number", "phone number", "calling number"])
-    qa_score_col = find_column(cols, ["qa score"])  # Explicitly using QA score, ignoring 'Total score'
+    qa_score_col = find_column(cols, ["qa score"])
     crit_error_flag_col = find_column(cols, ["did the ccr make a critical error"])
     crit_error_comment_col = find_column(cols, ["critical error comments", "specific critical error"])
     
@@ -116,7 +113,7 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
 
         missed_areas = []
 
-        # Check for Critical Errors first
+        # Check for Critical Errors
         if crit_error_flag_col:
             flag_val = str(row.get(crit_error_flag_col, "")).strip().lower()
             if flag_val in ["yes", "true", "1"]:
@@ -134,14 +131,12 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
                 matched_s_col = find_column(cols, [s_hint])
                 if matched_s_col:
                     raw_score = row.get(matched_s_col)
-                    # Check if score is strictly 0
                     try:
                         numeric_score = float(str(raw_score).replace("%", "").strip())
                     except (ValueError, TypeError):
                         numeric_score = None
 
                     if numeric_score == 0:
-                        # Extract associated reason comment
                         reason_text = ""
                         for c_hint in rubric["comment_col_hints"]:
                             matched_c_col = find_column(cols, [c_hint])
@@ -158,7 +153,7 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
                             "category": rubric["category"],
                             "reason": reason_text
                         })
-                        break  # Found fail for this rubric group
+                        break
 
         call_data = {
             "phone": calling_number,
@@ -170,4 +165,6 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
             grouped_agents[agent_name] = []
         grouped_agents[agent_name].append(call_data)
 
-    return grouped_agents
+    # Sort dictionary alphabetically by Agent Name (A to Z)
+    sorted_agents = dict(sorted(grouped_agents.items(), key=lambda item: item[0].strip().lower()))
+    return sorted_agents

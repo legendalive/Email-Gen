@@ -3,10 +3,10 @@ import config
 from modules.llm_engine import call_llm_resilient
 from modules.anonymizer import (
     extract_first_name,
-    scrub_sensitive_text,
     create_anonymized_payload,
     restore_pii
 )
+from modules.excel_parser import parse_excel_report
 
 st.set_page_config(
     page_title="QA Email Generator",
@@ -18,6 +18,9 @@ st.set_page_config(
 # Load configuration into session state
 if "settings" not in st.session_state:
     st.session_state.settings = config.load_settings()
+
+if "parsed_agents" not in st.session_state:
+    st.session_state.parsed_agents = None
 
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
@@ -110,73 +113,41 @@ with col3:
 
 st.divider()
 
-# --- DIAGNOSTICS & VERIFICATION ---
-tab1, tab2 = st.tabs(["🔒 Privacy & Zero-PII Test", "🧪 LLM Connection Test"])
+# ----------------- EXCEL UPLOAD SECTION -----------------
+st.subheader("📂 1. Upload QA Evaluation Report")
+uploaded_file = st.file_uploader("Upload Excel QA Report (.xlsx, .xls)", type=["xlsx", "xls"])
 
-with tab1:
-    st.subheader("Zero-PII Sanitization & Desanitization Demo")
-    st.caption("Demonstrates how data is stripped of PII before the AI sees it, then re-inserted afterwards.")
-    
-    test_agent = "BRIAN KEYA"
-    test_calls = [
-        {
-            "phone": "0790144494",
-            "qa_score": 85,
-            "missed_areas": [
-                {"category": "Identification & KYC", "reason": "Did not ask customer to confirm registered M-KOPA mobile number."}
-            ]
-        }
-    ]
-    
-    if st.button("Run Privacy Pipeline Simulation"):
-        agent_tok, anon_calls, token_map = create_anonymized_payload(test_agent, test_calls)
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("#### 1. What the AI Sees (Zero PII)")
-            st.json({
-                "agent_greeting_token": agent_tok,
-                "anonymized_calls": anon_calls
-            })
-            st.success("Notice: Real name, phone number, and 'M-KOPA' are completely removed.")
+if uploaded_file is not None:
+    try:
+        with st.spinner("Parsing evaluations, grouping by agent, and extracting category fails..."):
+            parsed_data = parse_excel_report(uploaded_file)
+            st.session_state.parsed_agents = parsed_data
             
-        with c2:
-            st.markdown("#### 2. Local Re-insertion (What You See)")
-            simulated_ai_output = (
-                f"Dear {agent_tok}\n\n"
-                f"In Week 30, 1 of your calls was audited averaging 85%. Below are the missed areas;\n\n"
-                f"[{anon_calls[0]['phone_token']} and 85%]\n"
-                f"- Identification & KYC: Did not confirm registered mobile number.\n\n"
-                f"Please work on the highlighted areas. I have attached the audited call for your reference."
-            )
-            final_email = restore_pii(simulated_ai_output, token_map)
-            st.text_area("Final Restored Email", value=final_email, height=180)
-            st.info("Notice: First name ('Brian') and phone number are safely restored locally.")
-
-with tab2:
-    st.subheader("Test AI Engine Connection")
-    if st.button("Run Connection Ping"):
-        or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
-        gr_k = st.session_state.settings.get("groq_api_key", "").strip()
-        if not or_k and not gr_k:
-            st.warning("Please save at least one API key in the sidebar.")
-        else:
-            status_box = st.empty()
-            with st.spinner("Pinging resilient model pool..."):
-                try:
-                    resp, model, provider = call_llm_resilient(
-                        system_prompt="Respond with: CONNECTED",
-                        user_prompt="Ping",
-                        openrouter_key=or_k,
-                        groq_key=gr_k,
-                        status_callback=lambda msg: status_box.info(msg)
-                    )
-                    status_box.empty()
-                    st.success(f"Connected to **{provider}** using model: `{model}`")
-                except Exception as e:
-                    status_box.empty()
-                    st.error(f"Error: {e}")
+        total_agents = len(parsed_data)
+        total_calls = sum(len(calls) for calls in parsed_data.values())
+        
+        st.success(f"Report Parsed Successfully! Detected **{total_calls} calls** across **{total_agents} agents**.")
+        
+        # Display Overview Table
+        summary_rows = []
+        for agent, calls in parsed_data.items():
+            scores = [c["qa_score"] for c in calls]
+            avg_score = round(sum(scores) / len(scores)) if scores else 0
+            fails_count = sum(len(c["missed_areas"]) for c in calls)
+            summary_rows.append({
+                "Agent Name": agent,
+                "First Name": extract_first_name(agent),
+                "Calls Audited": len(calls),
+                "Average QA Score": f"{avg_score}%",
+                "Total Missed Areas": fails_count,
+                "All 100%": "✅ Yes" if avg_score >= 100 and fails_count == 0 else "❌ No"
+            })
+        
+        st.dataframe(summary_rows, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error parsing file: {e}")
 
 st.divider()
-st.subheader("📂 Report Upload & Processing")
-st.info("Step 3 Ready. Next up in Step 4: Excel Ingestion & Category Fail Extraction.")
+st.subheader("🚀 2. Email Generation & Review")
+st.info("Step 4 Ready! The Excel ingestion engine is active.\n\nNext up in Step 5: Email Prompt Assembler & Next/Back Viewer Interface.")

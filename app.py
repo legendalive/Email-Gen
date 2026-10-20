@@ -258,14 +258,16 @@ if uploaded_file is not None and st.session_state.parsed_agents is None:
         
         total_agents = len(parsed_data)
         total_calls = sum(len(calls) for calls in parsed_data.values())
-        st.success(f"Report Loaded: **{total_calls} calls** across **{total_agents} agents**.")
+        st.success(f"Report Loaded: **{total_calls} calls** across **{total_agents} agents** (Alphabetized A-Z).")
     except Exception as e:
         st.error(f"Error parsing Excel file: {e}")
 
 if st.session_state.parsed_agents:
-    with st.expander("📊 View Parsed Agents Summary Table", expanded=False):
+    with st.expander("📊 View Parsed Agents Summary Table (Alphabetical)", expanded=False):
         summary_rows = []
-        for agent, calls in st.session_state.parsed_agents.items():
+        # Strictly alphabetical iteration
+        for agent in sorted(st.session_state.parsed_agents.keys(), key=lambda x: x.strip().lower()):
+            calls = st.session_state.parsed_agents[agent]
             scores = [c["qa_score"] for c in calls]
             avg_score = round(sum(scores) / len(scores)) if scores else 0
             fails_count = sum(len(c["missed_areas"]) for c in calls)
@@ -285,7 +287,8 @@ st.divider()
 st.subheader("🚀 2. Email Generation")
 
 if st.session_state.parsed_agents:
-    agents_list = list(st.session_state.parsed_agents.keys())
+    # Strictly alphabetical list of agents
+    agents_list = sorted(list(st.session_state.parsed_agents.keys()), key=lambda x: x.strip().lower())
     total_agents = len(agents_list)
     
     if st.button("⚡ Generate Emails for All Agents", type="primary"):
@@ -321,14 +324,15 @@ if st.session_state.parsed_agents:
                 }
                 progress_bar.progress((idx + 1) / total_agents)
             
-            status_box.success("🎉 All emails generated successfully!")
+            status_box.success("🎉 All emails generated successfully in alphabetical order!")
 
-# 3. EMAIL REVIEW & NAVIGATION
+# 3. EMAIL REVIEW & NAVIGATION (ALPHABETICAL)
 if st.session_state.generated_emails and st.session_state.parsed_agents:
     st.divider()
     st.subheader("📨 3. Review Generated Feedback Emails")
     
-    agents = list(st.session_state.generated_emails.keys())
+    # Strictly sorted alphabetically (A-Z)
+    agents = sorted(list(st.session_state.generated_emails.keys()), key=lambda x: x.strip().lower())
     num_agents = len(agents)
     
     if st.session_state.current_agent_idx >= num_agents:
@@ -354,7 +358,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     with top_c2:
         st.info(f"🏷️ **Full Agent Identity:** `{current_agent}`")
 
-    # Current email text
     active_email_text = agent_record["email"]
 
     # Copy Toolbar
@@ -375,15 +378,11 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             height=320,
             key=f"editor_box_{curr_idx}"
         )
-        # Keep state updated with user edits
         st.session_state.generated_emails[current_agent]["email"] = edited_email
         active_email_text = edited_email
 
     with tab_preview:
-        # Render a live formatted email preview container
         st.markdown(f"**Subject:** `{subject_line}`")
-        
-        # Build HTML card representation
         preview_html = ["<div style='background: #ffffff; padding: 22px; border-radius: 8px; border: 1px solid #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #1e293b;'>"]
         
         paragraphs = active_email_text.split("\n\n")
@@ -392,7 +391,6 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
             if not para:
                 continue
             
-            # Check if this paragraph contains a call header like [0790144494 and 85%]
             if para.startswith("[") and "]" in para:
                 lines = para.split("\n")
                 header = lines[0].strip()
@@ -413,13 +411,12 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
                         preview_html.append(f"<li style='margin-bottom: 4px; color: #334155;'>{item_text}</li>")
                     preview_html.append("</ul>")
             else:
-                # Regular paragraph (Dear..., Summary sentence, Closing line)
                 preview_html.append(f"<p style='margin: 0 0 12px 0;'>{para}</p>")
 
         preview_html.append("</div>")
         st.markdown("\n".join(preview_html), unsafe_allow_html=True)
 
-    # Navigation Buttons
+    # Navigation Buttons (Alphabetical Next/Back)
     b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
     
     with b_col1:

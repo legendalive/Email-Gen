@@ -417,7 +417,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
 
     active_email_text = agent_record["email"]
 
-    # ----------------- UNIFIED ACTION BAR: ZERO CLIPPING -----------------
+    # ----------------- UNIFIED ACTION BAR -----------------
     bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
     
     with bar_copy_col:
@@ -457,11 +457,39 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         st.markdown(rendered_rich_html, unsafe_allow_html=True)
 
     # ----------------- DOWNLOAD BUTTONS (BOTTOM) -----------------
+    week_suffix = st.session_state.settings.get("current_week", "Week").replace(" ", "_")
+    single_filename = f"Feedback_{first_name_only}_{week_suffix}.txt"
+    batch_filename = f"All_Feedback_Emails_{week_suffix}.txt"
+
     d_col1, d_col2 = st.columns(2)
     with d_col1:
         st.download_button(
             label=f"💾 Download {first_name_only}'s Email (.txt)",
             data=active_email_text,
-            file_name=f"Feedback_{first_name_only}_{st.session_state.settings.get('current_week', 'Week')}.txt",
+            file_name=single_filename,
             mime="text/plain",
-            use_container_width=Tr
+            use_container_width=True
+        )
+
+    with d_col2:
+        all_emails_export = []
+        for a_name in agents:
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(f"AGENT: {a_name}")
+            all_emails_export.append(f"SUBJECT: {subject_line}")
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(st.session_state.generated_emails[a_name]["email"])
+            all_emails_export.append("\n\n")
+            
+        all_export_text = "\n".join(all_emails_export)
+        st.download_button(
+            label="📦 Download All Emails (.txt)",
+            data=all_export_text,
+            file_name=batch_filename,
+            mime="text/plain",
+            use_container_width=True
+        )
+
+else:
+    if not st.session_state.parsed_agents:
+        st.info("Upload an Excel report above to begin generating emails.")

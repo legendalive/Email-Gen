@@ -1,6 +1,5 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import json
 import re
 import config
 from modules.anonymizer import extract_first_name
@@ -32,37 +31,35 @@ if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
 def clear_all_data():
-    """Resets all parsed and generated data for a clean session."""
     st.session_state.parsed_agents = None
     st.session_state.generated_emails = {}
     st.session_state.current_agent_idx = 0
     st.session_state.uploader_key += 1
 
 def get_subject_line(week_setting: str) -> str:
-    """Extracts the week number and formats subject: 'Coaching session for week [X]'."""
     cleaned = (week_setting or "").strip()
     digits = re.findall(r"\d+", cleaned)
     week_num = digits[0] if digits else cleaned.replace("Week", "").replace("week", "").strip() or "30"
     return f"Coaching session for week {week_num}"
 
-def render_copy_buttons(agent_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """Renders 3 responsive copy buttons that write directly to the user's clipboard."""
-    agent_json = json.dumps(agent_name)
-    subject_json = json.dumps(subject_line)
-    body_json = json.dumps(email_body)
+def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
+    """Renders 3 independent copy buttons via hidden DOM textareas to prevent string collisions."""
+    # Escape any HTML special characters for the hidden textareas
+    safe_first_name = first_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe_subject = subject_line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe_body = email_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     html_code = f"""
     <style>
-        .copy-container {{
+        .toolbar-wrap {{
             display: flex;
             gap: 10px;
             align-items: center;
-            margin-top: 5px;
-            margin-bottom: 5px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             flex-wrap: wrap;
+            margin: 4px 0 10px 0;
         }}
-        .copy-btn {{
+        .c-btn {{
             background-color: #f0f2f6;
             color: #31333f;
             border: 1px solid #d6d6d8;
@@ -76,77 +73,82 @@ def render_copy_buttons(agent_name: str, subject_line: str, email_body: str, key
             gap: 6px;
             transition: all 0.15s ease-in-out;
         }}
-        .copy-btn:hover {{
+        .c-btn:hover {{
             background-color: #e4e7eb;
             border-color: #ff4b4b;
             color: #ff4b4b;
         }}
-        .copy-btn-primary {{
+        .c-btn-red {{
             background-color: #ff4b4b;
             color: #ffffff;
             border: 1px solid #ff4b4b;
         }}
-        .copy-btn-primary:hover {{
+        .c-btn-red:hover {{
             background-color: #e03b3b;
             color: #ffffff;
-            border-color: #e03b3b;
         }}
     </style>
 
-    <div class="copy-container">
-        <button id="btn_agent_{key_suffix}" class="copy-btn" onclick="copyItem({agent_json}, 'btn_agent_{key_suffix}', '👤 Copy Name: {agent_name}')">
-            👤 Copy Name: {agent_name}
+    <!-- Hidden text sources ensuring 100% accurate separation -->
+    <textarea id="src_name_{key_suffix}" style="display:none;">{safe_first_name}</textarea>
+    <textarea id="src_subj_{key_suffix}" style="display:none;">{safe_subject}</textarea>
+    <textarea id="src_body_{key_suffix}" style="display:none;">{safe_body}</textarea>
+
+    <div class="toolbar-wrap">
+        <button id="b_name_{key_suffix}" class="c-btn" onclick="copyFromArea('src_name_{key_suffix}', 'b_name_{key_suffix}', '👤 Copy First Name: {safe_first_name}')">
+            👤 Copy First Name: {safe_first_name}
         </button>
-        <button id="btn_subj_{key_suffix}" class="copy-btn" onclick="copyItem({subject_json}, 'btn_subj_{key_suffix}', '📌 Copy Subject: {subject_line}')">
-            📌 Copy Subject: {subject_line}
+        <button id="b_subj_{key_suffix}" class="c-btn" onclick="copyFromArea('src_subj_{key_suffix}', 'b_subj_{key_suffix}', '📌 Copy Subject: {safe_subject}')">
+            📌 Copy Subject
         </button>
-        <button id="btn_body_{key_suffix}" class="copy-btn copy-btn-primary" onclick="copyItem({body_json}, 'btn_body_{key_suffix}', '✉️ Copy Email Body')">
+        <button id="b_body_{key_suffix}" class="c-btn c-btn-red" onclick="copyFromArea('src_body_{key_suffix}', 'b_body_{key_suffix}', '✉️ Copy Email Body')">
             ✉️ Copy Email Body
         </button>
     </div>
 
     <script>
-    function copyItem(text, btnId, originalLabel) {{
+    function copyFromArea(srcId, btnId, originalText) {{
+        const src = document.getElementById(srcId);
+        if (!src) return;
+        const val = src.value;
+
         if (navigator.clipboard && window.isSecureContext) {{
-            navigator.clipboard.writeText(text).then(() => {{
-                showDone(btnId, originalLabel);
-            }}).catch(() => {{
-                fallbackCopy(text, btnId, originalLabel);
-            }});
+            navigator.clipboard.writeText(val).then(() => showCheck(btnId, originalText))
+            .catch(() => execFallback(val, btnId, originalText));
         }} else {{
-            fallbackCopy(text, btnId, originalLabel);
+            execFallback(val, btnId, originalText);
         }}
     }}
 
-    function fallbackCopy(text, btnId, originalLabel) {{
-        const el = document.createElement('textarea');
-        el.value = text;
-        el.style.position = 'fixed';
-        el.style.left = '-9999px';
-        document.body.appendChild(el);
-        el.focus();
-        el.select();
+    function execFallback(text, btnId, originalText) {{
+        const temp = document.createElement("textarea");
+        temp.value = text;
+        temp.style.position = "fixed";
+        temp.style.left = "-9999px";
+        document.body.appendChild(temp);
+        temp.focus();
+        temp.select();
         try {{
             document.execCommand('copy');
-            showDone(btnId, originalLabel);
-        }} catch (err) {{
-            alert('Unable to copy automatically. Please copy manually.');
+            showCheck(btnId, originalText);
+        }} catch(e) {{
+            alert("Please copy manually.");
         }}
-        document.body.removeChild(el);
+        document.body.removeChild(temp);
     }}
 
-    function showDone(btnId, originalLabel) {{
+    function showCheck(btnId, originalText) {{
         const btn = document.getElementById(btnId);
         if (btn) {{
-            btn.innerHTML = '✅ Copied!';
-            btn.style.backgroundColor = '#28a745';
-            btn.style.borderColor = '#28a745';
-            btn.style.color = '#ffffff';
+            btn.innerHTML = "✅ Copied!";
+            btn.style.backgroundColor = "#28a745";
+            btn.style.borderColor = "#28a745";
+            btn.style.color = "#ffffff";
             setTimeout(() => {{
-                btn.innerHTML = originalLabel;
-                btn.style.backgroundColor = '';
-                btn.style.borderColor = '';
-                btn.style.color = '';
+                btn.innerHTML = originalText;
+                btn.style.backgroundColor = "";
+                btn.style.borderColor = "";
+                btn.style.color = "";
             }}, 2000);
         }}
     }}
@@ -159,7 +161,6 @@ with st.sidebar:
     st.title("⚙️ System Settings")
     st.caption("Saved locally / via Cloud Secrets.")
     
-    # 1. OpenRouter Section with Test Button
     st.subheader("🔑 OpenRouter (Primary)")
     openrouter_key = st.text_input(
         "OpenRouter API Key",
@@ -174,7 +175,6 @@ with st.sidebar:
             else:
                 st.error(f"Failed ({lat}s): {model_or_err}")
 
-    # 2. Groq Section with Test Button
     st.subheader("⚡ Groq (Ultra-Fast Fallback)")
     groq_key = st.text_input(
         "Groq API Key",
@@ -182,7 +182,7 @@ with st.sidebar:
         type="password"
     )
     if st.button("⚡ Test Groq", use_container_width=True):
-        with st.spinner("Testing Groq..."):
+        with st.spinner("Testing Groq API..."):
             ok, model_or_err, lat = test_groq_connection(groq_key.strip())
             if ok:
                 st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
@@ -191,7 +191,6 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. Scope & Rules
     st.subheader("📅 Scope & Rules")
     current_week = st.text_input(
         "Current Week",
@@ -233,7 +232,6 @@ with clear_col:
 
 st.divider()
 
-# System Monitor
 col1, col2, col3 = st.columns(3)
 has_or = bool(st.session_state.settings.get("openrouter_api_key"))
 has_groq = bool(st.session_state.settings.get("groq_api_key"))
@@ -247,7 +245,7 @@ with col3:
 
 st.divider()
 
-# ----------------- 1. EXCEL UPLOAD SECTION -----------------
+# 1. EXCEL UPLOAD
 st.subheader("📂 1. Upload QA Evaluation Report")
 uploaded_file = st.file_uploader(
     "Upload Excel QA Report (.xlsx, .xls)",
@@ -285,7 +283,7 @@ if st.session_state.parsed_agents:
 
 st.divider()
 
-# ----------------- 2. EMAIL GENERATION SECTION -----------------
+# 2. EMAIL GENERATION
 st.subheader("🚀 2. Email Generation")
 
 if st.session_state.parsed_agents:
@@ -306,7 +304,7 @@ if st.session_state.parsed_agents:
             
             for idx, agent in enumerate(agents_list):
                 calls = st.session_state.parsed_agents[agent]
-                status_box.info(f"Processing agent {idx + 1} of {total_agents}: **{agent}**...")
+                status_box.info(f"Generating for {agent} ({idx + 1}/{total_agents})...")
                 
                 email_text, model, prov = build_feedback_email_for_agent(
                     agent_name=agent,
@@ -315,7 +313,7 @@ if st.session_state.parsed_agents:
                     custom_rules=custom_r,
                     openrouter_key=or_k,
                     groq_key=gr_k,
-                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents} ({agent}): {msg}")
+                    status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents}: {msg}")
                 )
                 
                 st.session_state.generated_emails[agent] = {
@@ -327,7 +325,7 @@ if st.session_state.parsed_agents:
             
             status_box.success("🎉 All emails generated successfully!")
 
-# ----------------- 3. EMAIL REVIEW & NAVIGATION -----------------
+# 3. EMAIL REVIEW & NAVIGATION
 if st.session_state.generated_emails and st.session_state.parsed_agents:
     st.divider()
     st.subheader("📨 3. Review Generated Feedback Emails")
@@ -342,6 +340,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         
     curr_idx = st.session_state.current_agent_idx
     current_agent = agents[curr_idx]
+    first_name_only = extract_first_name(current_agent)
     agent_record = st.session_state.generated_emails[current_agent]
     agent_calls = st.session_state.parsed_agents[current_agent]
     
@@ -349,30 +348,41 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     avg_s = round(sum(scores) / len(scores)) if scores else 0
     subject_line = get_subject_line(st.session_state.settings.get("current_week", "Week 30"))
 
-    # Agent Header Card
-    hdr1, hdr2 = st.columns([3, 1])
-    with hdr1:
-        st.markdown(f"### **Agent ({curr_idx + 1} of {num_agents}): {current_agent}**")
-        st.caption(f"Audited Calls: {len(agent_calls)} | Average QA Score: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
+    # Agent Identity Card with disambiguation box
+    top_c1, top_c2 = st.columns([3, 2])
+    with top_c1:
+        st.markdown(f"### **Agent {curr_idx + 1} of {num_agents}: {first_name_only}**")
+        st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
+    with top_c2:
+        st.info(f"🏷️ **Full Agent Identity:** `{current_agent}`")
 
-    # --- 3 QUICK COPY BUTTONS ---
-    render_copy_buttons(
-        agent_name=current_agent,
+    # Copy Toolbar (First name only, subject, body)
+    render_copy_toolbar(
+        first_name=first_name_only,
         subject_line=subject_line,
         email_body=agent_record["email"],
         key_suffix=curr_idx
     )
     
-    # Editable Email Text Area
-    edited_email = st.text_area(
-        label=f"Subject: {subject_line}",
-        value=agent_record["email"],
-        height=320,
-        key=f"editor_{curr_idx}"
-    )
-    st.session_state.generated_emails[current_agent]["email"] = edited_email
+    # Formatted Preview & Editor Tabs
+    tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Formatted Preview (Headings & Bullets)"])
     
-    # Navigation & Export Buttons
+    with tab_edit:
+        edited_email = st.text_area(
+            label=f"Subject: {subject_line}",
+            value=agent_record["email"],
+            height=300,
+            key=f"editor_{curr_idx}"
+        )
+        st.session_state.generated_emails[current_agent]["email"] = edited_email
+
+    with tab_preview:
+        # Renders headings and bullet points formatted as they will appear
+        preview_md = edited_email.replace("\n", "\n\n")
+        st.markdown(f"**Subject:** `{subject_line}`")
+        st.markdown(edited_email)
+
+    # Navigation Buttons
     b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.5, 1.5])
     
     with b_col1:
@@ -389,7 +399,7 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         st.download_button(
             label="💾 Download This Email",
             data=edited_email,
-            file_name=f"Feedback_{extract_first_name(current_agent)}_{st.session_state.settings.get('current_week', 'Week')}.txt",
+            file_name=f"Feedback_{first_name_only}_{st.session_state.settings.get('current_week', 'Week')}.txt",
             mime="text/plain",
             use_container_width=True
         )

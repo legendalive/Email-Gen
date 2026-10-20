@@ -1,5 +1,6 @@
 import streamlit as st
 import config
+from modules.llm_engine import call_llm_resilient
 
 st.set_page_config(
     page_title="QA Email Generator",
@@ -75,8 +76,10 @@ st.divider()
 # System Readiness Monitor
 col1, col2, col3 = st.columns(3)
 
+has_or = bool(st.session_state.settings.get("openrouter_api_key"))
+has_groq = bool(st.session_state.settings.get("groq_api_key"))
+
 with col1:
-    has_or = bool(st.session_state.settings.get("openrouter_api_key"))
     st.metric(
         label="OpenRouter (Primary)",
         value="Configured" if has_or else "Missing",
@@ -85,7 +88,6 @@ with col1:
     )
 
 with col2:
-    has_groq = bool(st.session_state.settings.get("groq_api_key"))
     st.metric(
         label="Groq (Fallback)",
         value="Configured" if has_groq else "Not Set",
@@ -102,9 +104,33 @@ with col3:
 
 st.divider()
 
-# Staged Placeholder
+# --- DIAGNOSTIC TOOL: Test LLM Fallback Engine ---
+st.subheader("🧪 Test AI Engine Connection & Fallback")
+st.caption("Verify that your API keys connect and dynamic free model selection succeeds.")
+
+if st.button("Run Connection Test"):
+    or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
+    gr_k = st.session_state.settings.get("groq_api_key", "").strip()
+    
+    if not or_k and not gr_k:
+        st.warning("Please save at least one API key in the sidebar before testing.")
+    else:
+        status_box = st.empty()
+        with st.spinner("Discovering best available free model..."):
+            try:
+                response_text, model_used, provider = call_llm_resilient(
+                    system_prompt="You are a system diagnostic tester. Respond with only one word: 'CONNECTED'.",
+                    user_prompt="Ping",
+                    openrouter_key=or_k,
+                    groq_key=gr_k,
+                    status_callback=lambda msg: status_box.info(msg)
+                )
+                status_box.empty()
+                st.success(f"Connection Successful! Responded via **{provider}** using model: `{model_used}`")
+            except Exception as e:
+                status_box.empty()
+                st.error(f"Test Failed: {str(e)}")
+
+st.divider()
 st.subheader("📂 Report Upload & Processing")
-st.info(
-    "Step 1 Complete! Settings structure & UI framework are active.\n\n"
-    "Ready for Step 2: The Resilient LLM Engine (dynamic OpenRouter free-model selection + Groq auto-failover)."
-)
+st.info("Step 2 Ready. Next up in Step 3: Zero-PII Sanitization & Desanitization Pipeline.")

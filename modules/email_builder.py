@@ -6,6 +6,35 @@ from modules.anonymizer import (
 )
 from modules.llm_engine import call_llm_resilient
 
+CATEGORY_CLEAN_MAP = {
+    "call opening": "Call Opening & Professionalism",
+    "identification": "KYC & Verification",
+    "enthusiasm": "Tone & Enthusiasm",
+    "active listening": "Active Listening & Empathy",
+    "clear communication": "Clear Communication & Etiquette",
+    "telephone etiquette": "Clear Communication & Etiquette",
+    "understanding": "Understanding the Issue",
+    "troubleshooting": "Process Compliance & Troubleshooting",
+    "process compliance": "Process Compliance",
+    "customer education": "Customer Education",
+    "issue resolution": "Issue Resolution",
+    "resolve": "Issue Resolution",
+    "escalates": "Issue Escalation",
+    "calls back": "Callback Procedure",
+    "call closing": "Closing Procedure",
+    "closing procedure": "Closing Procedure",
+    "critical error": "Critical Process Compliance"
+}
+
+def clean_category_name(raw_cat: str) -> str:
+    """Standardizes rubric names into clean, formal corporate headings."""
+    lower = raw_cat.lower()
+    for key, val in CATEGORY_CLEAN_MAP.items():
+        if key in lower:
+            return val
+    cleaned = raw_cat.split("-")[-1].strip()
+    return cleaned.title() if cleaned else "Process Compliance"
+
 def summarize_missed_area_with_ai(
     category: str,
     raw_reason: str,
@@ -14,78 +43,87 @@ def summarize_missed_area_with_ai(
     groq_key: str
 ) -> str:
     """
-    Transforms raw reviewer comments into a direct, punchy bullet point
-    explaining specifically what the agent did wrong.
+    Transforms reviewer notes into actionable, positive coaching advice starting
+    with an active directive verb (e.g., 'Personalize...', 'Ensure...', 'Offer...').
     """
     clean_cat = scrub_sensitive_text(category)
     clean_reason = scrub_sensitive_text(raw_reason)
 
     sys_prompt = (
-        "You are a strict QA coach. Write a single, concise bullet point stating specifically "
-        "what the agent did wrong on the call based on the reviewer notes.\n"
+        "You are an executive QA coach writing formal email feedback to an agent.\n"
+        "Transform the audit notes into a single constructive, actionable coaching sentence.\n"
         "RULES:\n"
-        "1. Start directly with what was done wrong (e.g., 'Failed to...', 'Did not...', 'Omitted...').\n"
+        "1. Start directly with an active directive verb (e.g., 'Personalize the conversation...', "
+        "'Offer further assistance...', 'Ensure mandatory verification is completed...').\n"
         "2. Do NOT mention category labels, codes, or reviewer names.\n"
-        "3. Zero conversational filler, zero fluff. Maximum 1 clear sentence.\n"
+        "3. Zero conversational filler, zero preamble. Maximum 1 concise sentence.\n"
         "4. Never mention company names."
     )
     if custom_rules:
         sys_prompt += f"\nSupplementary guidelines: {custom_rules}"
 
-    user_prompt = f"Category Context: {clean_cat}\nReviewer notes: {clean_reason}\nWhat did the agent do wrong?"
+    user_prompt = f"Category: {clean_cat}\nNotes: {clean_reason}\nProvide positive, formal coaching advice:"
     try:
-        summary, _, _ = call_llm_resilient(sys_prompt, user_prompt, openrouter_key, groq_key)
-        summary = summary.replace('"', '').replace("'", "").strip()
-        summary = re.sub(r"^[-*•\d.]+\s*", "", summary).strip()
-        return summary
+        advice, _, _ = call_llm_resilient(sys_prompt, user_prompt, openrouter_key, groq_key)
+        advice = advice.replace('"', '').replace("'", "").strip()
+        advice = re.sub(r"^[-*•◦\d.]+\s*", "", advice).strip()
+        return advice
     except Exception:
-        fallback = clean_reason if clean_reason else f"Did not meet requirements for {clean_cat}."
+        fallback = clean_reason if clean_reason else f"Adhere to company procedures for {clean_cat}."
         return fallback
 
 def convert_email_to_rich_html(plain_text: str) -> str:
     """
-    Converts plain text email into email-client compliant Rich HTML with inline styles.
+    Converts plain text into email-client compliant Rich HTML with native nested lists.
     When copied to clipboard as text/html, Gmail and Outlook paste this natively with
-    true bold headings and real indented bullet lists.
+    true bold parent bullets and circle-bullet children.
     """
     html_out = [
         '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
         'font-size: 14px; line-height: 1.6; color: #1e293b; max-width: 650px;">'
     ]
 
-    paragraphs = plain_text.split("\n\n")
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
+    blocks = plain_text.split("\n\n")
+    for block in blocks:
+        block = block.strip()
+        if not block:
             continue
 
-        # Detect call headers like [116205498 95%]
-        if para.startswith("[") and "]" in para:
-            lines = para.split("\n")
-            header = lines[0].strip()
-            html_out.append(
-                f'<p style="margin: 18px 0 6px 0; font-size: 15px; font-weight: bold; color: #0f172a; '
-                f'background-color: #f1f5f9; padding: 6px 10px; border-radius: 4px; display: inline-block;">{header}</p>'
-            )
+        # Check if block contains call bullet entries
+        if block.startswith("• Call") or "\n• Call" in block:
+            lines = block.split("\n")
+            html_out.append('<ul style="list-style-type: disc; margin: 12px 0 16px 0; padding-left: 20px;">')
+            
+            in_sublist = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("• Call"):
+                    if in_sublist:
+                        html_out.append('</ul></li>')
+                        in_sublist = False
+                    
+                    call_title = stripped.lstrip("•").strip()
+                    html_out.append(f'<li style="margin-bottom: 10px;"><b>{call_title}</b>')
+                    html_out.append('<ul style="list-style-type: circle; margin-top: 4px; margin-bottom: 6px; padding-left: 22px;">')
+                    in_sublist = True
+                elif stripped.startswith("◦"):
+                    item_text = stripped.lstrip("◦").strip()
+                    if ":" in item_text:
+                        cat_part, advice_part = item_text.split(":", 1)
+                        formatted_item = f"<b>{cat_part.strip()}:</b> {advice_part.strip()}"
+                    else:
+                        formatted_item = item_text
+                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal; color: #334155;">{formatted_item}</li>')
+                elif stripped:
+                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal; color: #334155;">{stripped}</li>')
 
-            rest = lines[1:]
-            bullets = [l.strip() for l in rest if l.strip().startswith("•")]
-            non_bullets = [l.strip() for l in rest if not l.strip().startswith("•")]
-
-            for nb in non_bullets:
-                if nb:
-                    html_out.append(f'<p style="margin: 4px 0 8px 0; color: #334155;">{nb}</p>')
-
-            if bullets:
-                html_out.append('<ul style="margin: 6px 0 16px 0; padding-left: 22px;">')
-                for b in bullets:
-                    cleaned_b = b.lstrip("•").strip()
-                    html_out.append(f'<li style="margin-bottom: 5px; color: #334155;">{cleaned_b}</li>')
-                html_out.append('</ul>')
+            if in_sublist:
+                html_out.append('</ul></li>')
+            html_out.append('</ul>')
 
         else:
-            # Regular text paragraphs (Greeting, Week Summary, Closing note)
-            html_out.append(f'<p style="margin: 0 0 14px 0; color: #1e293b;">{para}</p>')
+            # Paragraph text (Greeting, Summary sentence, Closing statement)
+            html_out.append(f'<p style="margin: 0 0 14px 0; color: #1e293b;">{block}</p>')
 
     html_out.append('</div>')
     return "".join(html_out)
@@ -100,64 +138,71 @@ def build_feedback_email_for_agent(
     status_callback=None
 ) -> Tuple[str, str, str]:
     """
-    Deterministic Structural Assembler:
-    Enforces format: [Calling_Number Score%] (number, space, score).
+    Formal QA Breakdown Assembler:
+    Constructs the exact hierarchical structure from your screenshot.
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
     scores = [c["qa_score"] for c in calls]
-    avg_score = round(sum(scores) / len(scores)) if scores else 0
+    
+    # Calculate average score (preserve 1 decimal place if fractional like 92.5%)
+    raw_avg = sum(scores) / len(scores) if scores else 0
+    avg_score_str = f"{int(raw_avg)}" if raw_avg.is_integer() else f"{round(raw_avg, 1)}"
+    
     all_100 = all(c["qa_score"] >= 100 and len(c.get("missed_areas", [])) == 0 for c in calls)
 
     # 1. SPECIAL CASE: All calls 100%
     if all_100:
         email = (
-            f"Dear {first_name}\n\n"
+            f"Hi {first_name},\n\n"
             f"Well done for scoring 100% in all the calls audited for this week. keep up the good work."
         )
         return email, "Deterministic Rule", "Internal"
 
-    # 2. Standard Consolidation
+    # 2. Formal Structure Matching Screenshot
     email_blocks = []
-    email_blocks.append(f"Dear {first_name}")
+    email_blocks.append(f"Hi {first_name},")
 
-    verb = "was" if total_calls == 1 else "were"
-    call_word = "call" if total_calls == 1 else "calls"
-    email_blocks.append(f"In {week}, {total_calls} of your {call_word} {verb} audited averaging {avg_score}%. Below are the missed areas;")
+    # Clean target week representation
+    clean_week = week.strip().lower() if week.strip().lower().startswith("week") else f"week {week.strip()}"
+    call_word = "call was" if total_calls == 1 else "calls were"
+    email_blocks.append(f"{total_calls} of your {call_word} audited for {clean_week}. You averaged {avg_score_str}%. Below is a breakdown of the audited calls")
 
-    has_any_missed_area = False
+    call_sections = []
+    has_any_missed = False
 
     for idx, call in enumerate(calls, start=1):
-        phone_num = str(call.get("phone", f"Call #{idx}")).strip()
+        phone_num = str(call.get("phone", f"070000000{idx}")).strip()
         score_val = call.get("qa_score", 0)
+        score_str = f"{int(score_val)}" if score_val.is_integer() else f"{round(score_val, 1)}"
         missed = call.get("missed_areas", [])
 
-        # Formatted as: [Calling_Number Score%] (number, space, score - e.g. [116205498 95%])
-        call_header = f"[{phone_num} {int(score_val) if score_val.is_integer() else score_val}%]"
+        call_lines = [f"• Call {phone_num} ({score_str}%)"]
 
         if score_val >= 100 and not missed:
-            call_content = f"{call_header}\nYou scored 100% in this call. Good job"
-            email_blocks.append(call_content)
+            call_lines.append("    ◦ You scored 100% in this call. Good job")
         else:
-            has_any_missed_area = True
-            bullet_lines = [call_header]
+            has_any_missed = True
             for item in missed:
-                cat = item.get("category", "")
+                raw_cat = item.get("category", "")
+                cat_label = clean_category_name(raw_cat)
                 reason = item.get("reason", "")
                 
-                bullet_desc = summarize_missed_area_with_ai(
-                    category=cat,
+                coaching_advice = summarize_missed_area_with_ai(
+                    category=raw_cat,
                     raw_reason=reason,
                     custom_rules=custom_rules,
                     openrouter_key=openrouter_key,
                     groq_key=groq_key
                 )
-                bullet_lines.append(f"• {bullet_desc}")
+                call_lines.append(f"    ◦ {cat_label}: {coaching_advice}")
 
-            email_blocks.append("\n".join(bullet_lines))
+        call_sections.append("\n".join(call_lines))
 
-    if has_any_missed_area:
-        email_blocks.append("Please work on the highlighted areas. I have attached the audited call for your reference.")
+    email_blocks.append("\n\n".join(call_sections))
+
+    if has_any_missed:
+        email_blocks.append("I have attached your penalized calls. Please work on the highlighted areas.")
 
     final_email = "\n\n".join(email_blocks)
-    return final_email, "Hybrid Engine (Rich Format)", "OpenRouter/Groq"
+    return final_email, "Formal Nested Engine", "OpenRouter/Groq"

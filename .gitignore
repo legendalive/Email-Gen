@@ -1,0 +1,17 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local config & secrets (Prevents your API keys from being exposed on GitHub)
+settings.json
+.streamlit/secrets.toml
+.env
+
+# OS files
+.DS_Store
+Thumbs.db

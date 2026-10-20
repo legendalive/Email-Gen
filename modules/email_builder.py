@@ -75,12 +75,12 @@ def summarize_missed_area_with_ai(
 def convert_email_to_rich_html(plain_text: str) -> str:
     """
     Converts plain text into email-client compliant Rich HTML with native nested lists.
-    When copied to clipboard as text/html, Gmail and Outlook paste this natively with
-    true bold parent bullets and circle-bullet children.
+    Leaves text color completely unforced (inheriting native email client colors)
+    so it renders crisp black in light mode and pure white in dark mode.
     """
     html_out = [
         '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
-        'font-size: 14px; line-height: 1.6; color: #1e293b; max-width: 650px;">'
+        'font-size: 14px; line-height: 1.6; max-width: 650px;">'
     ]
 
     blocks = plain_text.split("\n\n")
@@ -113,9 +113,9 @@ def convert_email_to_rich_html(plain_text: str) -> str:
                         formatted_item = f"<b>{cat_part.strip()}:</b> {advice_part.strip()}"
                     else:
                         formatted_item = item_text
-                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal; color: #334155;">{formatted_item}</li>')
+                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal;">{formatted_item}</li>')
                 elif stripped:
-                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal; color: #334155;">{stripped}</li>')
+                    html_out.append(f'<li style="margin-bottom: 4px; font-weight: normal;">{stripped}</li>')
 
             if in_sublist:
                 html_out.append('</ul></li>')
@@ -123,7 +123,7 @@ def convert_email_to_rich_html(plain_text: str) -> str:
 
         else:
             # Paragraph text (Greeting, Summary sentence, Closing statement)
-            html_out.append(f'<p style="margin: 0 0 14px 0; color: #1e293b;">{block}</p>')
+            html_out.append(f'<p style="margin: 0 0 14px 0;">{block}</p>')
 
     html_out.append('</div>')
     return "".join(html_out)
@@ -139,13 +139,12 @@ def build_feedback_email_for_agent(
 ) -> Tuple[str, str, str]:
     """
     Formal QA Breakdown Assembler:
-    Constructs the exact hierarchical structure from your screenshot.
+    Constructs clean, formal email feedback adhering strictly to native email styling.
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
     scores = [c["qa_score"] for c in calls]
     
-    # Calculate average score (preserve 1 decimal place if fractional like 92.5%)
     raw_avg = sum(scores) / len(scores) if scores else 0
     avg_score_str = f"{int(raw_avg)}" if raw_avg.is_integer() else f"{round(raw_avg, 1)}"
     
@@ -163,7 +162,6 @@ def build_feedback_email_for_agent(
     email_blocks = []
     email_blocks.append(f"Hi {first_name},")
 
-    # Clean target week representation
     clean_week = week.strip().lower() if week.strip().lower().startswith("week") else f"week {week.strip()}"
     call_word = "call was" if total_calls == 1 else "calls were"
     email_blocks.append(f"{total_calls} of your {call_word} audited for {clean_week}. You averaged {avg_score_str}%. Below is a breakdown of the audited calls")

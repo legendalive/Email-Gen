@@ -15,6 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize Session State
 if "settings" not in st.session_state:
     st.session_state.settings = config.load_settings()
 
@@ -43,6 +44,7 @@ def get_subject_line(week_setting: str) -> str:
     return f"Coaching session for week {week_num}"
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
+    """Renders 3 clean, unclipped copy buttons."""
     rich_html = convert_email_to_rich_html(email_body)
     
     json_name = json.dumps(first_name)
@@ -52,7 +54,9 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
 
     html_code = f"""
     <style>
-        * {{ box-sizing: border-box; }}
+        * {{
+            box-sizing: border-box;
+        }}
         body {{
             margin: 0;
             padding: 2px 0 0 0;
@@ -190,7 +194,7 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
     function showSuccess(btnId, originalText) {{
         const btn = document.getElementById(btnId);
         if (btn) {{
-            btn.innerHTML = "✅ Copied with Formatting!";
+            btn.innerHTML = "✅ Copied!";
             btn.style.backgroundColor = "#28a745";
             btn.style.borderColor = "#28a745";
             btn.style.color = "#ffffff";
@@ -400,13 +404,38 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
     avg_s = f"{int(raw_avg)}" if raw_avg.is_integer() else f"{round(raw_avg, 1)}"
     subject_line = get_subject_line(st.session_state.settings.get("current_week", "Week 30"))
 
-    # Top info line
-    top_c1, top_c2 = st.columns([3, 2])
+    # Top info line + REGENERATE BUTTON
+    top_c1, top_c2, top_c3 = st.columns([3, 2, 1.3])
     with top_c1:
         st.markdown(f"### **Agent {curr_idx + 1} of {num_agents}: {first_name_only}**")
         st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}`")
     with top_c2:
         st.info(f"🏷️ **Full Agent Identity:** `{current_agent}`")
+    with top_c3:
+        st.write("")  # vertical alignment
+        if st.button("🔄 Regenerate Email", key=f"regen_{curr_idx}", help="Resend only this agent's calls to the AI for a fresh draft", use_container_width=True):
+            or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
+            gr_k = st.session_state.settings.get("groq_api_key", "").strip()
+            week_val = st.session_state.settings.get("current_week", "Week 30")
+            custom_r = st.session_state.settings.get("custom_rules", "")
+            
+            with st.spinner(f"Regenerating email for {first_name_only}..."):
+                new_email, new_model, new_prov = build_feedback_email_for_agent(
+                    agent_name=current_agent,
+                    calls=agent_calls,
+                    week=week_val,
+                    custom_rules=custom_r,
+                    openrouter_key=or_k,
+                    groq_key=gr_k
+                )
+                # Update both session data and the editor widget state
+                st.session_state.generated_emails[current_agent] = {
+                    "email": new_email,
+                    "model": new_model,
+                    "provider": new_prov
+                }
+                st.session_state[f"editor_box_{curr_idx}"] = new_email
+                st.rerun()
 
     active_email_text = agent_record["email"]
 

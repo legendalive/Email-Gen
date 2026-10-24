@@ -5,6 +5,7 @@ from typing import Dict, Any
 CONFIG_FILE = "settings.json"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "gemini_api_key": "",
     "openrouter_api_key": "",
     "groq_api_key": "",
     "current_week": "Week 30",
@@ -18,7 +19,7 @@ def load_settings() -> Dict[str, Any]:
     """
     config = DEFAULT_CONFIG.copy()
 
-    # 1. Check Streamlit Cloud Secrets (if hosted on Streamlit Community Cloud)
+    # 1. Check Streamlit Cloud Secrets
     try:
         import streamlit as st
         if hasattr(st, "secrets"):
@@ -28,13 +29,13 @@ def load_settings() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 2. Check local settings.json (overrides if user saved in session)
+    # 2. Check local settings.json
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 for k, v in saved.items():
-                    if v:  # Only override if not empty
+                    if v:
                         config[k] = v
         except Exception as e:
             print(f"Warning: Could not read {CONFIG_FILE}: {e}")

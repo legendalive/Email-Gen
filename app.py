@@ -6,7 +6,11 @@ import config
 from modules.anonymizer import extract_first_name
 from modules.excel_parser import parse_excel_report
 from modules.email_builder import build_feedback_email_for_agent, convert_email_to_rich_html
-from modules.llm_engine import test_openrouter_connection, test_groq_connection
+from modules.llm_engine import (
+    test_gemini_connection,
+    test_openrouter_connection,
+    test_groq_connection
+)
 
 st.set_page_config(
     page_title="QA Email Generator",
@@ -44,7 +48,7 @@ def get_subject_line(week_setting: str) -> str:
     return f"Coaching session for week {week_num}"
 
 def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """Renders 3 clean, unclipped copy buttons."""
+    """Renders 3 clean, unclipped copy buttons with rich HTML + plain text clipboard support."""
     rich_html = convert_email_to_rich_html(email_body)
     
     json_name = json.dumps(first_name)
@@ -213,13 +217,33 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
     st.title("⚙️ System Settings")
-    st.caption("Saved locally / via Cloud Secrets.")
-    
-    st.subheader("🔑 OpenRouter (Primary)")
+    st.caption("Cascade: Gemini → OpenRouter → Groq")
+
+    # 1. Google Gemini Section (FIRST OPTION)
+    st.subheader("🌟 Google Gemini (Primary / #1)")
+    gemini_key = st.text_input(
+        "Gemini API Key",
+        value=st.session_state.settings.get("gemini_api_key", ""),
+        type="password",
+        help="Primary API. Automatically discovers and selects the best active Gemini model."
+    )
+    if st.button("⚡ Test Gemini", use_container_width=True):
+        with st.spinner("Pinging Google Gemini API..."):
+            ok, model_or_err, lat = test_gemini_connection(gemini_key.strip())
+            if ok:
+                st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
+            else:
+                st.error(f"Failed ({lat}s): {model_or_err}")
+
+    st.divider()
+
+    # 2. OpenRouter Section (SECOND OPTION)
+    st.subheader("🔑 OpenRouter (Secondary / #2)")
     openrouter_key = st.text_input(
         "OpenRouter API Key",
         value=st.session_state.settings.get("openrouter_api_key", ""),
-        type="password"
+        type="password",
+        help="Secondary option. Dynamically selects live $0 free models."
     )
     if st.button("⚡ Test OpenRouter", use_container_width=True):
         with st.spinner("Testing OpenRouter..."):
@@ -229,11 +253,15 @@ with st.sidebar:
             else:
                 st.error(f"Failed ({lat}s): {model_or_err}")
 
-    st.subheader("⚡ Groq (Fallback)")
+    st.divider()
+
+    # 3. Groq Section (FALLBACK OPTION)
+    st.subheader("⚡ Groq (Fallback / #3)")
     groq_key = st.text_input(
         "Groq API Key",
         value=st.session_state.settings.get("groq_api_key", ""),
-        type="password"
+        type="password",
+        help="High-speed fallback pool if Gemini and OpenRouter are unavailable."
     )
     if st.button("⚡ Test Groq", use_container_width=True):
         with st.spinner("Pinging Groq server..."):
@@ -245,22 +273,24 @@ with st.sidebar:
 
     st.divider()
 
+    # 4. Scope & Custom Rules
     st.subheader("📅 Scope & Rules")
     current_week = st.text_input(
         "Current Week",
         value=st.session_state.settings.get("current_week", "Week 30"),
         placeholder="e.g. Week 30, Week 39"
     )
-    
+
     custom_rules = st.text_area(
         "Custom AI Instructions",
         value=st.session_state.settings.get("custom_rules", ""),
         height=100,
         placeholder="Supplementary instructions..."
     )
-    
+
     if st.button("💾 Save Settings", use_container_width=True, type="primary"):
         new_settings = {
+            "gemini_api_key": gemini_key.strip(),
             "openrouter_api_key": openrouter_key.strip(),
             "groq_api_key": groq_key.strip(),
             "current_week": current_week.strip(),
@@ -268,7 +298,7 @@ with st.sidebar:
         }
         if config.save_settings(new_settings):
             st.session_state.settings = new_settings
-            st.success("Settings saved!")
+            st.success("Settings saved successfully!")
         else:
             st.error("Error saving settings.")
 
@@ -286,16 +316,35 @@ with clear_col:
 
 st.divider()
 
-col1, col2, col3 = st.columns(3)
+# System Readiness Monitor (4 Columns)
+col1, col2, col3, col4 = st.columns(4)
+has_gemini = bool(st.session_state.settings.get("gemini_api_key"))
 has_or = bool(st.session_state.settings.get("openrouter_api_key"))
 has_groq = bool(st.session_state.settings.get("groq_api_key"))
 
 with col1:
-    st.metric("OpenRouter (Primary)", "Configured" if has_or else "Missing", "Ready" if has_or else "- Required", delta_color="normal" if has_or else "inverse")
+    st.metric(
+        "Gemini (Primary)",
+        "Configured" if has_gemini else "Missing",
+        "Ready" if has_gemini else "- Recommended",
+        delta_color="normal" if has_gemini else "inverse"
+    )
 with col2:
-    st.metric("Groq (Fallback)", "Configured" if has_groq else "Not Set", "Protected" if has_groq else "Optional", delta_color="normal" if has_groq else "off")
+    st.metric(
+        "OpenRouter",
+        "Configured" if has_or else "Not Set",
+        "Secondary" if has_or else "Optional",
+        delta_color="normal" if has_or else "off"
+    )
 with col3:
-    st.metric("Target Week Scope", st.session_state.settings.get("current_week", "Not Set"))
+    st.metric(
+        "Groq",
+        "Configured" if has_groq else "Not Set",
+        "Fallback" if has_groq else "Optional",
+        delta_color="normal" if has_groq else "off"
+    )
+with col4:
+    st.metric("Target Scope", st.session_state.settings.get("current_week", "Not Set"))
 
 st.divider()
 
@@ -311,7 +360,7 @@ if uploaded_file is not None and st.session_state.parsed_agents is None:
     try:
         parsed_data = parse_excel_report(uploaded_file)
         st.session_state.parsed_agents = parsed_data
-        
+
         total_agents = len(parsed_data)
         total_calls = sum(len(calls) for calls in parsed_data.values())
         st.success(f"Report Loaded: **{total_calls} calls** across **{total_agents} agents** (Alphabetized A-Z).")
@@ -344,174 +393,76 @@ st.subheader("🚀 2. Email Generation")
 if st.session_state.parsed_agents:
     agents_list = sorted(list(st.session_state.parsed_agents.keys()), key=lambda x: x.strip().lower())
     total_agents = len(agents_list)
-    
+
     if st.button("⚡ Generate Emails for All Agents", type="primary"):
+        gem_k = st.session_state.settings.get("gemini_api_key", "").strip()
         or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
         gr_k = st.session_state.settings.get("groq_api_key", "").strip()
         week_val = st.session_state.settings.get("current_week", "Week 30")
         custom_r = st.session_state.settings.get("custom_rules", "")
-        
-        if not or_k and not gr_k:
+
+        if not gem_k and not or_k and not gr_k:
             st.error("Please configure at least one API key in the sidebar before generating emails.")
         else:
             progress_bar = st.progress(0.0)
             status_box = st.empty()
-            
+
             for idx, agent in enumerate(agents_list):
                 calls = st.session_state.parsed_agents[agent]
                 status_box.info(f"Processing agent {idx + 1} of {total_agents}: **{agent}**...")
-                
+
                 email_text, model, prov = build_feedback_email_for_agent(
                     agent_name=agent,
                     calls=calls,
                     week=week_val,
                     custom_rules=custom_r,
+                    gemini_key=gem_k,
                     openrouter_key=or_k,
                     groq_key=gr_k,
                     status_callback=lambda msg: status_box.info(f"Agent {idx + 1}/{total_agents}: {msg}")
                 )
-                
+
                 st.session_state.generated_emails[agent] = {
                     "email": email_text,
                     "model": model,
                     "provider": prov
                 }
                 progress_bar.progress((idx + 1) / total_agents)
-            
+
             status_box.success("🎉 All emails generated successfully in formal nested format!")
 
 # 3. EMAIL REVIEW & NAVIGATION (ALPHABETICAL)
 if st.session_state.generated_emails and st.session_state.parsed_agents:
     st.divider()
     st.subheader("📨 3. Review Generated Feedback Emails")
-    
+
     agents = sorted(list(st.session_state.generated_emails.keys()), key=lambda x: x.strip().lower())
     num_agents = len(agents)
-    
+
     if st.session_state.current_agent_idx >= num_agents:
         st.session_state.current_agent_idx = num_agents - 1
     if st.session_state.current_agent_idx < 0:
         st.session_state.current_agent_idx = 0
-        
+
     curr_idx = st.session_state.current_agent_idx
     current_agent = agents[curr_idx]
     first_name_only = extract_first_name(current_agent)
     agent_record = st.session_state.generated_emails[current_agent]
     agent_calls = st.session_state.parsed_agents[current_agent]
-    
+
     scores = [c["qa_score"] for c in agent_calls]
     raw_avg = sum(scores) / len(scores) if scores else 0
     avg_s = f"{int(raw_avg)}" if raw_avg.is_integer() else f"{round(raw_avg, 1)}"
     subject_line = get_subject_line(st.session_state.settings.get("current_week", "Week 30"))
 
-    # Top info line + REGENERATE BUTTON
+    # Top info line + Individual Agent Regenerate Button
     top_c1, top_c2, top_c3 = st.columns([3, 2, 1.3])
     with top_c1:
         st.markdown(f"### **Agent {curr_idx + 1} of {num_agents}: {first_name_only}**")
-        st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}`")
+        st.caption(f"Calls Audited: {len(agent_calls)} | Average QA: {avg_s}% | Engine: `{agent_record['model']}` ({agent_record['provider']})")
     with top_c2:
         st.info(f"🏷️ **Full Agent Identity:** `{current_agent}`")
     with top_c3:
-        st.write("")  # vertical alignment
+        st.write("")
         if st.button("🔄 Regenerate Email", key=f"regen_{curr_idx}", help="Resend only this agent's calls to the AI for a fresh draft", use_container_width=True):
-            or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
-            gr_k = st.session_state.settings.get("groq_api_key", "").strip()
-            week_val = st.session_state.settings.get("current_week", "Week 30")
-            custom_r = st.session_state.settings.get("custom_rules", "")
-            
-            with st.spinner(f"Regenerating email for {first_name_only}..."):
-                new_email, new_model, new_prov = build_feedback_email_for_agent(
-                    agent_name=current_agent,
-                    calls=agent_calls,
-                    week=week_val,
-                    custom_rules=custom_r,
-                    openrouter_key=or_k,
-                    groq_key=gr_k
-                )
-                # Update both session data and the editor widget state
-                st.session_state.generated_emails[current_agent] = {
-                    "email": new_email,
-                    "model": new_model,
-                    "provider": new_prov
-                }
-                st.session_state[f"editor_box_{curr_idx}"] = new_email
-                st.rerun()
-
-    active_email_text = agent_record["email"]
-
-    # Action Bar: Copy Toolbar + Previous/Next
-    bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
-    
-    with bar_copy_col:
-        render_copy_toolbar(
-            first_name=first_name_only,
-            subject_line=subject_line,
-            email_body=active_email_text,
-            key_suffix=curr_idx
-        )
-        
-    with bar_prev_col:
-        if st.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
-            st.session_state.current_agent_idx -= 1
-            st.rerun()
-            
-    with bar_next_col:
-        if st.button("Next ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True, type="primary"):
-            st.session_state.current_agent_idx += 1
-            st.rerun()
-
-    # Editor & Live Preview Tabs
-    tab_edit, tab_preview = st.tabs(["✏️ Email Editor", "👁️ Live Email Client Preview"])
-    
-    with tab_edit:
-        edited_email = st.text_area(
-            label=f"Subject: {subject_line}",
-            value=active_email_text,
-            height=320,
-            key=f"editor_box_{curr_idx}"
-        )
-        st.session_state.generated_emails[current_agent]["email"] = edited_email
-        active_email_text = edited_email
-
-    with tab_preview:
-        st.markdown(f"**Subject:** `{subject_line}`")
-        rendered_rich_html = convert_email_to_rich_html(active_email_text)
-        st.markdown(rendered_rich_html, unsafe_allow_html=True)
-
-    # Download Buttons at Bottom
-    week_suffix = st.session_state.settings.get("current_week", "Week").replace(" ", "_")
-    single_filename = f"Feedback_{first_name_only}_{week_suffix}.txt"
-    batch_filename = f"All_Feedback_Emails_{week_suffix}.txt"
-
-    d_col1, d_col2 = st.columns(2)
-    with d_col1:
-        st.download_button(
-            label=f"💾 Download {first_name_only}'s Email (.txt)",
-            data=active_email_text,
-            file_name=single_filename,
-            mime="text/plain",
-            use_container_width=True
-        )
-
-    with d_col2:
-        all_emails_export = []
-        for a_name in agents:
-            all_emails_export.append("=" * 60)
-            all_emails_export.append(f"AGENT: {a_name}")
-            all_emails_export.append(f"SUBJECT: {subject_line}")
-            all_emails_export.append("=" * 60)
-            all_emails_export.append(st.session_state.generated_emails[a_name]["email"])
-            all_emails_export.append("\n\n")
-            
-        all_export_text = "\n".join(all_emails_export)
-        st.download_button(
-            label="📦 Download All Emails (.txt)",
-            data=all_export_text,
-            file_name=batch_filename,
-            mime="text/plain",
-            use_container_width=True
-        )
-
-else:
-    if not st.session_state.parsed_agents:
-        st.info("Upload an Excel report above to begin generating emails.")
+            gem_k = st.session_state.settings.get("gemini_api_key", "").strip()

@@ -39,12 +39,13 @@ def summarize_missed_area_with_ai(
     category: str,
     raw_reason: str,
     custom_rules: str,
-    openrouter_key: str,
-    groq_key: str
+    gemini_key: str = "",
+    openrouter_key: str = "",
+    groq_key: str = ""
 ) -> str:
     """
     Transforms reviewer notes into actionable, positive coaching advice starting
-    with an active directive verb (e.g., 'Personalize...', 'Ensure...', 'Offer...').
+    with an active directive verb. Cascades: Gemini -> OpenRouter -> Groq.
     """
     clean_cat = scrub_sensitive_text(category)
     clean_reason = scrub_sensitive_text(raw_reason)
@@ -64,7 +65,13 @@ def summarize_missed_area_with_ai(
 
     user_prompt = f"Category: {clean_cat}\nNotes: {clean_reason}\nProvide positive, formal coaching advice:"
     try:
-        advice, _, _ = call_llm_resilient(sys_prompt, user_prompt, openrouter_key, groq_key)
+        advice, _, _ = call_llm_resilient(
+            system_prompt=sys_prompt,
+            user_prompt=user_prompt,
+            gemini_key=gemini_key,
+            openrouter_key=openrouter_key,
+            groq_key=groq_key
+        )
         advice = advice.replace('"', '').replace("'", "").strip()
         advice = re.sub(r"^[-*•◦\d.]+\s*", "", advice).strip()
         return advice
@@ -75,7 +82,7 @@ def summarize_missed_area_with_ai(
 def convert_email_to_rich_html(plain_text: str) -> str:
     """
     Converts plain text into email-client compliant Rich HTML with native nested lists.
-    Enforces font-size: 9pt with proportional line-height and spacing.
+    Enforces font-size: 9pt with proportional line-height and unforced native color.
     """
     html_out = [
         '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
@@ -88,7 +95,6 @@ def convert_email_to_rich_html(plain_text: str) -> str:
         if not block:
             continue
 
-        # Check if block contains call bullet entries
         if block.startswith("• Call") or "\n• Call" in block:
             lines = block.split("\n")
             html_out.append('<ul style="list-style-type: disc; margin: 10px 0 14px 0; padding-left: 18px;">')
@@ -121,7 +127,6 @@ def convert_email_to_rich_html(plain_text: str) -> str:
             html_out.append('</ul>')
 
         else:
-            # Paragraph text (Greeting, Summary sentence, Closing statement)
             html_out.append(f'<p style="margin: 0 0 10px 0; font-size: 9pt;">{block}</p>')
 
     html_out.append('</div>')
@@ -132,14 +137,12 @@ def build_feedback_email_for_agent(
     calls: List[Dict[str, Any]],
     week: str,
     custom_rules: str,
-    openrouter_key: str,
-    groq_key: str,
+    gemini_key: str = "",
+    openrouter_key: str = "",
+    groq_key: str = "",
     status_callback=None
 ) -> Tuple[str, str, str]:
-    """
-    Formal QA Breakdown Assembler:
-    Constructs clean, formal email feedback adhering strictly to native email styling.
-    """
+    """Formal QA Breakdown Assembler with Gemini -> OpenRouter -> Groq fallback."""
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
     scores = [c["qa_score"] for c in calls]
@@ -149,7 +152,6 @@ def build_feedback_email_for_agent(
     
     all_100 = all(c["qa_score"] >= 100 and len(c.get("missed_areas", [])) == 0 for c in calls)
 
-    # 1. SPECIAL CASE: All calls 100%
     if all_100:
         email = (
             f"Hi {first_name},\n\n"
@@ -157,7 +159,6 @@ def build_feedback_email_for_agent(
         )
         return email, "Deterministic Rule", "Internal"
 
-    # 2. Formal Structure Matching Screenshot
     email_blocks = []
     email_blocks.append(f"Hi {first_name},")
 
@@ -189,6 +190,7 @@ def build_feedback_email_for_agent(
                     category=raw_cat,
                     raw_reason=reason,
                     custom_rules=custom_rules,
+                    gemini_key=gemini_key,
                     openrouter_key=openrouter_key,
                     groq_key=groq_key
                 )
@@ -202,4 +204,4 @@ def build_feedback_email_for_agent(
         email_blocks.append("I have attached your penalized calls. Please work on the highlighted areas.")
 
     final_email = "\n\n".join(email_blocks)
-    return final_email, "Formal Nested Engine", "OpenRouter/Groq"
+    return final_email, "Formal Nested Engine", "Gemini/OpenRouter/Groq"

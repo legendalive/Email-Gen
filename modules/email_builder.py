@@ -27,7 +27,7 @@ CATEGORY_CLEAN_MAP = {
 }
 
 def clean_category_name(raw_cat: str) -> str:
-    """Standardizes rubric names into clean, formal corporate headings."""
+    """Standardizes rubric names into clean corporate headings."""
     lower = raw_cat.lower()
     for key, val in CATEGORY_CLEAN_MAP.items():
         if key in lower:
@@ -82,7 +82,7 @@ def summarize_missed_area_with_ai(
 def convert_email_to_rich_html(plain_text: str) -> str:
     """
     Converts plain text into email-client compliant Rich HTML with native nested lists.
-    Enforces font-size: 9pt with proportional line-height and unforced native color.
+    Enforces font-size: 9pt with unforced native colors.
     """
     html_out = [
         '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
@@ -142,7 +142,10 @@ def build_feedback_email_for_agent(
     groq_key: str = "",
     status_callback=None
 ) -> Tuple[str, str, str]:
-    """Formal QA Breakdown Assembler with Gemini -> OpenRouter -> Groq fallback."""
+    """
+    Formal QA Breakdown Assembler:
+    Guarantees every penalized call (< 100%) has an explanatory coaching bullet.
+    """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
     scores = [c["qa_score"] for c in calls]
@@ -152,6 +155,7 @@ def build_feedback_email_for_agent(
     
     all_100 = all(c["qa_score"] >= 100 and len(c.get("missed_areas", [])) == 0 for c in calls)
 
+    # 1. SPECIAL CASE: All calls 100%
     if all_100:
         email = (
             f"Hi {first_name},\n\n"
@@ -159,6 +163,7 @@ def build_feedback_email_for_agent(
         )
         return email, "Deterministic Rule", "Internal"
 
+    # 2. Formal Structure
     email_blocks = []
     email_blocks.append(f"Hi {first_name},")
 
@@ -181,20 +186,27 @@ def build_feedback_email_for_agent(
             call_lines.append("    ◦ You scored 100% in this call. Good job")
         else:
             has_any_missed = True
-            for item in missed:
-                raw_cat = item.get("category", "")
-                cat_label = clean_category_name(raw_cat)
-                reason = item.get("reason", "")
-                
-                coaching_advice = summarize_missed_area_with_ai(
-                    category=raw_cat,
-                    raw_reason=reason,
-                    custom_rules=custom_rules,
-                    gemini_key=gemini_key,
-                    openrouter_key=openrouter_key,
-                    groq_key=groq_key
-                )
-                call_lines.append(f"    ◦ {cat_label}: {coaching_advice}")
+            
+            # Guarantee: If score < 100, we NEVER output a blank call without coaching advice
+            if not missed:
+                deduction = 100 - score_val
+                ded_str = f"{int(deduction)}" if deduction.is_integer() else f"{round(deduction, 1)}"
+                call_lines.append(f"    ◦ Process Compliance: Review call handling procedures to recover the {ded_str}% deduction on this interaction.")
+            else:
+                for item in missed:
+                    raw_cat = item.get("category", "")
+                    cat_label = clean_category_name(raw_cat)
+                    reason = item.get("reason", "")
+                    
+                    coaching_advice = summarize_missed_area_with_ai(
+                        category=raw_cat,
+                        raw_reason=reason,
+                        custom_rules=custom_rules,
+                        gemini_key=gemini_key,
+                        openrouter_key=openrouter_key,
+                        groq_key=groq_key
+                    )
+                    call_lines.append(f"    ◦ {cat_label}: {coaching_advice}")
 
         call_sections.append("\n".join(call_lines))
 

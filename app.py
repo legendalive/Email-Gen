@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import json
 import re
+import html
 import config
 from modules.anonymizer import extract_first_name
 from modules.excel_parser import parse_excel_report
@@ -47,45 +48,46 @@ def get_subject_line(week_setting: str) -> str:
     week_num = digits[0] if digits else cleaned.replace("Week", "").replace("week", "").strip() or "30"
     return f"Coaching session for week {week_num}"
 
-def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key_suffix: int):
-    """Renders 3 clean, unclipped copy buttons with rich HTML + plain text clipboard support."""
+def render_copy_toolbar(first_name: str, subject_line: str, email_body: str):
+    """
+    Robust, crash-proof copy toolbar. Stores content in hidden HTML containers
+    to prevent script collisions or React unmounting errors.
+    """
     rich_html = convert_email_to_rich_html(email_body)
     
-    json_name = json.dumps(first_name)
-    json_subj = json.dumps(subject_line)
-    json_body_plain = json.dumps(email_body)
-    json_body_html = json.dumps(rich_html)
+    # Safely escape text for HTML containers
+    escaped_name = html.escape(first_name)
+    escaped_subject = html.escape(subject_line)
+    escaped_plain_body = html.escape(email_body)
 
     html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
     <style>
-        * {{
-            box-sizing: border-box;
-        }}
+        * {{ box-sizing: border-box; }}
         body {{
             margin: 0;
             padding: 2px 0 0 0;
             background: transparent;
-            overflow: hidden;
-        }}
-        .toolbar-wrap {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             display: flex;
             gap: 8px;
             align-items: center;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            flex-wrap: nowrap;
+            overflow: hidden;
         }}
         .c-btn {{
             background-color: #f0f2f6;
             color: #31333f;
             border: 1px solid #d6d6d8;
-            padding: 7px 13px;
+            padding: 7px 12px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
             font-weight: 500;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             white-space: nowrap;
             height: 38px;
             transition: all 0.15s ease-in-out;
@@ -105,130 +107,80 @@ def render_copy_toolbar(first_name: str, subject_line: str, email_body: str, key
             color: #ffffff;
         }}
     </style>
-
-    <div class="toolbar-wrap">
-        <button id="b_name" class="c-btn" onclick="copyName()">
-            👤 Copy Name: {first_name}
+    </head>
+    <body>
+        <button class="c-btn" onclick="copyPlain('{escaped_name}', this)">
+            👤 Copy Name: {escaped_name}
         </button>
-        <button id="b_subj" class="c-btn" onclick="copySubject()">
+        <button class="c-btn" onclick="copyPlain('{escaped_subject}', this)">
             📌 Copy Subject
         </button>
-        <button id="b_body" class="c-btn c-btn-red" onclick="copyBody()">
+        <button class="c-btn c-btn-red" onclick="copyRich(this)">
             ✉️ Copy Email Body
         </button>
-    </div>
 
-    <script>
-    const nameVal = {json_name};
-    const subjVal = {json_subj};
-    const bodyPlain = {json_body_plain};
-    const bodyHtml = {json_body_html};
+        <!-- Hidden Data Containers -->
+        <div id="hidden_rich" style="display:none;">{rich_html}</div>
+        <textarea id="hidden_plain" style="display:none;">{escaped_plain_body}</textarea>
 
-    function copyName() {{
-        doCopyPlain(nameVal, 'b_name', '👤 Copy Name: {first_name}');
-    }}
+        <script>
+        function copyPlain(text, btn) {{
+            navigator.clipboard.writeText(text).then(() => flashSuccess(btn));
+        }}
 
-    function copySubject() {{
-        doCopyPlain(subjVal, 'b_subj', '📌 Copy Subject');
-    }}
+        async function copyRich(btn) {{
+            const htmlData = document.getElementById('hidden_rich').innerHTML;
+            const plainData = document.getElementById('hidden_plain').value;
 
-    async function copyBody() {{
-        if (navigator.clipboard && window.ClipboardItem) {{
-            try {{
-                const blobHtml = new Blob([bodyHtml], {{ type: 'text/html' }});
-                const blobPlain = new Blob([bodyPlain], {{ type: 'text/plain' }});
-                const item = new ClipboardItem({{ 'text/html': blobHtml, 'text/plain': blobPlain }});
-                await navigator.clipboard.write([item]);
-                showSuccess('b_body', '✉️ Copy Email Body');
-                return;
-            }} catch (err) {{
-                console.warn('ClipboardItem failed:', err);
+            if (navigator.clipboard && window.ClipboardItem) {{
+                try {{
+                    const blobHtml = new Blob([htmlData], {{ type: 'text/html' }});
+                    const blobPlain = new Blob([plainData], {{ type: 'text/plain' }});
+                    const item = new ClipboardItem({{ 'text/html': blobHtml, 'text/plain': blobPlain }});
+                    await navigator.clipboard.write([item]);
+                    flashSuccess(btn);
+                    return;
+                }} catch (e) {{
+                    console.warn('ClipboardItem error, falling back:', e);
+                }}
             }}
+
+            navigator.clipboard.writeText(plainData).then(() => flashSuccess(btn));
         }}
 
-        const container = document.createElement('div');
-        container.innerHTML = bodyHtml;
-        container.style.position = 'fixed';
-        container.style.left = '-9999px';
-        document.body.appendChild(container);
-
-        const range = document.createRange();
-        range.selectNodeContents(container);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-        try {{
-            document.execCommand('copy');
-            showSuccess('b_body', '✉️ Copy Email Body');
-        }} catch (e) {{
-            navigator.clipboard.writeText(bodyPlain);
-            showSuccess('b_body', '✉️ Copy Email Body');
-        }}
-        sel.removeAllRanges();
-        document.body.removeChild(container);
-    }}
-
-    function doCopyPlain(text, btnId, originalLabel) {{
-        if (navigator.clipboard && window.isSecureContext) {{
-            navigator.clipboard.writeText(text).then(() => showSuccess(btnId, originalLabel))
-            .catch(() => fallbackPlain(text, btnId, originalLabel));
-        }} else {{
-            fallbackPlain(text, btnId, originalLabel);
-        }}
-    }}
-
-    function fallbackPlain(text, btnId, originalLabel) {{
-        const temp = document.createElement("textarea");
-        temp.value = text;
-        temp.style.position = "fixed";
-        temp.style.left = "-9999px";
-        document.body.appendChild(temp);
-        temp.focus();
-        temp.select();
-        try {{
-            document.execCommand('copy');
-            showSuccess(btnId, originalLabel);
-        }} catch(e) {{
-            alert("Copy failed. Please copy manually.");
-        }}
-        document.body.removeChild(temp);
-    }}
-
-    function showSuccess(btnId, originalText) {{
-        const btn = document.getElementById(btnId);
-        if (btn) {{
+        function flashSuccess(btn) {{
+            const original = btn.innerHTML;
             btn.innerHTML = "✅ Copied!";
             btn.style.backgroundColor = "#28a745";
             btn.style.borderColor = "#28a745";
             btn.style.color = "#ffffff";
             setTimeout(() => {{
-                btn.innerHTML = originalText;
+                btn.innerHTML = original;
                 btn.style.backgroundColor = "";
                 btn.style.borderColor = "";
                 btn.style.color = "";
             }}, 2000);
         }}
-    }}
-    </script>
+        </script>
+    </body>
+    </html>
     """
-    components.html(html_code, height=50)
+    components.html(html_code, height=46)
 
 # ----------------- SIDEBAR: SETTINGS -----------------
 with st.sidebar:
     st.title("⚙️ System Settings")
     st.caption("Cascade: Gemini → OpenRouter → Groq")
 
-    # 1. Google Gemini Section (FIRST OPTION)
+    # 1. Google Gemini (PRIMARY / #1)
     st.subheader("🌟 Google Gemini (Primary / #1)")
     gemini_key = st.text_input(
         "Gemini API Key",
         value=st.session_state.settings.get("gemini_api_key", ""),
-        type="password",
-        help="Primary API. Automatically discovers and selects the best active Gemini model."
+        type="password"
     )
     if st.button("⚡ Test Gemini", use_container_width=True):
-        with st.spinner("Pinging Google Gemini API..."):
+        with st.spinner("Testing Google Gemini..."):
             ok, model_or_err, lat = test_gemini_connection(gemini_key.strip())
             if ok:
                 st.success(f"Connected in {lat}s!\nModel: `{model_or_err}`")
@@ -237,13 +189,12 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. OpenRouter Section (SECOND OPTION)
+    # 2. OpenRouter (SECONDARY / #2)
     st.subheader("🔑 OpenRouter (Secondary / #2)")
     openrouter_key = st.text_input(
         "OpenRouter API Key",
         value=st.session_state.settings.get("openrouter_api_key", ""),
-        type="password",
-        help="Secondary option. Dynamically selects live $0 free models."
+        type="password"
     )
     if st.button("⚡ Test OpenRouter", use_container_width=True):
         with st.spinner("Testing OpenRouter..."):
@@ -255,13 +206,12 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. Groq Section (FALLBACK OPTION)
+    # 3. Groq (FALLBACK / #3)
     st.subheader("⚡ Groq (Fallback / #3)")
     groq_key = st.text_input(
         "Groq API Key",
         value=st.session_state.settings.get("groq_api_key", ""),
-        type="password",
-        help="High-speed fallback pool if Gemini and OpenRouter are unavailable."
+        type="password"
     )
     if st.button("⚡ Test Groq", use_container_width=True):
         with st.spinner("Pinging Groq server..."):
@@ -273,7 +223,7 @@ with st.sidebar:
 
     st.divider()
 
-    # 4. Scope & Custom Rules
+    # 4. Scope & Rules
     st.subheader("📅 Scope & Rules")
     current_week = st.text_input(
         "Current Week",
@@ -316,33 +266,18 @@ with clear_col:
 
 st.divider()
 
-# System Readiness Monitor (4 Columns)
+# System Readiness Monitor
 col1, col2, col3, col4 = st.columns(4)
 has_gemini = bool(st.session_state.settings.get("gemini_api_key"))
 has_or = bool(st.session_state.settings.get("openrouter_api_key"))
 has_groq = bool(st.session_state.settings.get("groq_api_key"))
 
 with col1:
-    st.metric(
-        "Gemini (Primary)",
-        "Configured" if has_gemini else "Missing",
-        "Ready" if has_gemini else "- Recommended",
-        delta_color="normal" if has_gemini else "inverse"
-    )
+    st.metric("Gemini (Primary)", "Configured" if has_gemini else "Missing", "Ready" if has_gemini else "- Recommended", delta_color="normal" if has_gemini else "inverse")
 with col2:
-    st.metric(
-        "OpenRouter",
-        "Configured" if has_or else "Not Set",
-        "Secondary" if has_or else "Optional",
-        delta_color="normal" if has_or else "off"
-    )
+    st.metric("OpenRouter", "Configured" if has_or else "Not Set", "Secondary" if has_or else "Optional", delta_color="normal" if has_or else "off")
 with col3:
-    st.metric(
-        "Groq",
-        "Configured" if has_groq else "Not Set",
-        "Fallback" if has_groq else "Optional",
-        delta_color="normal" if has_groq else "off"
-    )
+    st.metric("Groq", "Configured" if has_groq else "Not Set", "Fallback" if has_groq else "Optional", delta_color="normal" if has_groq else "off")
 with col4:
     st.metric("Target Scope", st.session_state.settings.get("current_week", "Not Set"))
 
@@ -466,3 +401,105 @@ if st.session_state.generated_emails and st.session_state.parsed_agents:
         st.write("")
         if st.button("🔄 Regenerate Email", key=f"regen_{curr_idx}", help="Resend only this agent's calls to the AI for a fresh draft", use_container_width=True):
             gem_k = st.session_state.settings.get("gemini_api_key", "").strip()
+            or_k = st.session_state.settings.get("openrouter_api_key", "").strip()
+            gr_k = st.session_state.settings.get("groq_api_key", "").strip()
+            week_val = st.session_state.settings.get("current_week", "Week 30")
+            custom_r = st.session_state.settings.get("custom_rules", "")
+
+            with st.spinner(f"Regenerating email for {first_name_only}..."):
+                new_email, new_model, new_prov = build_feedback_email_for_agent(
+                    agent_name=current_agent,
+                    calls=agent_calls,
+                    week=week_val,
+                    custom_rules=custom_r,
+                    gemini_key=gem_k,
+                    openrouter_key=or_k,
+                    groq_key=gr_k
+                )
+                st.session_state.generated_emails[current_agent] = {
+                    "email": new_email,
+                    "model": new_model,
+                    "provider": new_prov
+                }
+                st.session_state[f"editor_box_{curr_idx}"] = new_email
+                st.rerun()
+
+    active_email_text = agent_record.get("email", "")
+
+    # Action Row: Copy Toolbar + Previous / Next
+    bar_copy_col, bar_prev_col, bar_next_col = st.columns([3.8, 1.1, 1.1])
+
+    with bar_copy_col:
+        render_copy_toolbar(
+            first_name=first_name_only,
+            subject_line=subject_line,
+            email_body=active_email_text
+        )
+
+    with bar_prev_col:
+        if st.button("⬅️ Previous", disabled=(curr_idx == 0), use_container_width=True):
+            st.session_state.current_agent_idx -= 1
+            st.rerun()
+
+    with bar_next_col:
+        if st.button("Next ➡️", disabled=(curr_idx == num_agents - 1), use_container_width=True, type="primary"):
+            st.session_state.current_agent_idx += 1
+            st.rerun()
+
+    # Email Tabs: Formatted Preview (First!) & Editor
+    tab_preview, tab_edit = st.tabs(["👁️ Live Formatted Preview", "✏️ Edit Email Draft"])
+
+    with tab_preview:
+        st.markdown(f"**Subject:** `{subject_line}`")
+        rendered_rich_html = convert_email_to_rich_html(active_email_text)
+        st.markdown(rendered_rich_html, unsafe_allow_html=True)
+
+    with tab_edit:
+        edited_email = st.text_area(
+            label=f"Subject: {subject_line}",
+            value=active_email_text,
+            height=320,
+            key=f"editor_box_{curr_idx}"
+        )
+        st.session_state.generated_emails[current_agent]["email"] = edited_email
+        active_email_text = edited_email
+
+    st.write("")
+
+    # Download Buttons at Bottom
+    week_suffix = st.session_state.settings.get("current_week", "Week").replace(" ", "_")
+    single_filename = f"Feedback_{first_name_only}_{week_suffix}.txt"
+    batch_filename = f"All_Feedback_Emails_{week_suffix}.txt"
+
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+        st.download_button(
+            label=f"💾 Download {first_name_only}'s Email (.txt)",
+            data=active_email_text,
+            file_name=single_filename,
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    with d_col2:
+        all_emails_export = []
+        for a_name in agents:
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(f"AGENT: {a_name}")
+            all_emails_export.append(f"SUBJECT: {subject_line}")
+            all_emails_export.append("=" * 60)
+            all_emails_export.append(st.session_state.generated_emails[a_name].get("email", ""))
+            all_emails_export.append("\n\n")
+
+        all_export_text = "\n".join(all_emails_export)
+        st.download_button(
+            label="📦 Download All Emails (.txt)",
+            data=all_export_text,
+            file_name=batch_filename,
+            mime="text/plain",
+            use_container_width=True
+        )
+
+else:
+    if not st.session_state.parsed_agents:
+        st.info("Upload an Excel report above to begin generating emails.")

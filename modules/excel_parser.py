@@ -2,70 +2,74 @@ import pandas as pd
 import re
 from typing import Dict, List, Any
 
-# Rubric score columns and their corresponding comment/explanation columns
-RUBRIC_MAPPINGS = [
+# Rubric definitions with normalized search patterns
+RUBRIC_DEFINITIONS = [
     {
         "category": "Call Opening & Professionalism",
-        "score_col_hints": ["professionalism"],
-        "comment_col_hints": ["call opening comments", "opening comments"]
+        "score_hints": ["professionalism", "call opening script"],
+        "comment_hints": ["call opening comments", "opening comments", "call opening"]
     },
     {
-        "category": "Identification and KYC Checks",
-        "score_col_hints": ["identification and kyc checks", "kyc checks:"],
-        "comment_col_hints": ["kyc checks comments", "identification comments"]
+        "category": "Identification & KYC Checks",
+        "score_hints": ["identification and kyc checks", "kyc checks", "identification checks"],
+        "comment_hints": ["kyc checks comments", "identification comments", "kyc comments"]
     },
     {
-        "category": "Telephone Etiquette - Enthusiasm",
-        "score_col_hints": ["enthusiasm:"],
-        "comment_col_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette"]
+        "category": "Tone & Enthusiasm",
+        "score_hints": ["enthusiasm"],
+        "comment_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette", "service mindset"]
     },
     {
-        "category": "Telephone Etiquette - Active Listening & Empathy",
-        "score_col_hints": ["active listening & empathy", "active listening"],
-        "comment_col_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette"]
+        "category": "Active Listening & Empathy",
+        "score_hints": ["active listening & empathy", "active listening", "empathy"],
+        "comment_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette", "service mindset"]
     },
     {
-        "category": "Telephone Etiquette - Clear Communication",
-        "score_col_hints": ["clear communication"],
-        "comment_col_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette"]
+        "category": "Clear Communication & Etiquette",
+        "score_hints": ["clear communication"],
+        "comment_hints": ["telephone etiquette (service mindset) commments", "telephone etiquette", "service mindset"]
     },
     {
-        "category": "Process Compliance - Understanding of Issue",
-        "score_col_hints": ["understanding of the issue"],
-        "comment_col_hints": ["a. process compliance comments", "process compliance comments"]
+        "category": "Understanding the Issue",
+        "score_hints": ["understanding of the issue", "probe the customer"],
+        "comment_hints": ["a. process compliance comments", "process compliance comments"]
     },
     {
-        "category": "Process Compliance - Troubleshooting",
-        "score_col_hints": ["correct troubleshooting"],
-        "comment_col_hints": ["b. process compliance comments", "process compliance comments"]
+        "category": "Process Compliance & Troubleshooting",
+        "score_hints": ["correct troubleshooting", "systematic troubleshooting"],
+        "comment_hints": ["b. process compliance comments", "process compliance comments"]
     },
     {
-        "category": "Process Compliance - Customer Education",
-        "score_col_hints": ["customer education"],
-        "comment_col_hints": ["b. process compliance comments", "process compliance comments"]
+        "category": "Customer Education",
+        "score_hints": ["customer education", "self help"],
+        "comment_hints": ["b. process compliance comments", "process compliance comments"]
     },
     {
         "category": "Issue Resolution",
-        "score_col_hints": ["resolve:", "escalates:", "calls back:"],
-        "comment_col_hints": ["issue resolution comments"]
+        "score_hints": ["resolve:", "escalates:", "calls back:", "issue resolution category"],
+        "comment_hints": ["issue resolution comments", "resolution comments"]
     },
     {
-        "category": "Call Closing - Wrap Up & Closing Procedure",
-        "score_col_hints": ["wrap up :", "closing procedure:"],
-        "comment_col_hints": ["call closing comments"]
+        "category": "Wrap Up",
+        "score_hints": ["wrap up"],
+        "comment_hints": ["call closing comments", "wrap up comments"]
+    },
+    {
+        "category": "Closing Procedure",
+        "score_hints": ["closing procedure", "offers further assistance"],
+        "comment_hints": ["call closing comments", "closing comments"]
     }
 ]
 
-def find_column(columns: List[str], search_terms: List[str]) -> str:
-    """Finds a column name in the sheet matching any of the search terms."""
-    for term in search_terms:
-        for col in columns:
-            if term.lower() in str(col).lower():
-                return col
-    return ""
+def normalize_text(text: Any) -> str:
+    """Strips non-breaking spaces (\xa0), trailing spaces, and standardizes to lowercase."""
+    if text is None:
+        return ""
+    s = str(text).replace("\xa0", " ").strip()
+    return re.sub(r"\s+", " ", s).lower()
 
 def clean_qa_score(val: Any) -> float:
-    """Safely converts QA score values like '100%', '85', 0.85 to a float percentage (e.g. 100.0, 85.0)."""
+    """Safely converts QA score values to a float percentage (e.g. 100.0, 95.0, 85.0)."""
     if pd.isna(val) or val is None or val == "":
         return 0.0
     s = str(val).replace("%", "").strip()
@@ -77,83 +81,125 @@ def clean_qa_score(val: Any) -> float:
     except ValueError:
         return 0.0
 
+def is_failed_score(val: Any) -> bool:
+    """Detects if a score cell indicates a deduction / fail (0, 0%, or explicit 0)."""
+    if pd.isna(val) or val is None:
+        return False
+    s = str(val).replace("%", "").strip()
+    try:
+        return float(s) == 0.0
+    except ValueError:
+        return s.lower() in ["fail", "no", "failed"]
+
 def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Parses the QA Excel file:
-    - Ignores 'Total score', uses 'QA score'.
-    - Groups rows by Agent Name.
-    - Flags any rubric category with a 0 as a missed area.
-    - Sorts all agents in strict alphabetical order (A-Z).
+    Enhanced Excel Ingestion:
+    Discovers every failed category, comment, and explanation across all audit columns.
     """
     df = pd.read_excel(file_bytes)
-    cols = list(df.columns)
+    raw_cols = list(df.columns)
     
-    agent_col = find_column(cols, ["name of customer care representative", "ccr) being scored", "agent name"])
-    phone_col = find_column(cols, ["customer's phone number", "phone number", "calling number"])
-    qa_score_col = find_column(cols, ["qa score"])
-    crit_error_flag_col = find_column(cols, ["did the ccr make a critical error"])
-    crit_error_comment_col = find_column(cols, ["critical error comments", "specific critical error"])
-    
+    # Map normalized column names back to original DataFrame columns
+    norm_to_orig = {normalize_text(col): col for col in raw_cols}
+    norm_cols = list(norm_to_orig.keys())
+
+    def match_col(hints: List[str]) -> str:
+        for hint in hints:
+            h_norm = normalize_text(hint)
+            for nc in norm_cols:
+                if h_norm in nc:
+                    return norm_to_orig[nc]
+        return ""
+
+    agent_col = match_col(["name of customer care representative", "ccr) being scored", "agent name"])
+    phone_col = match_col(["customer's phone number", "phone number", "calling number"])
+    qa_score_col = match_col(["qa score"])
+    overall_comment_col = match_col(["overall comments on ccr call performance", "overall comments"])
+    crit_flag_col = match_col(["did the ccr make a critical error"])
+    crit_desc_col = match_col(["critical error comments", "specific critical error made"])
+
     if not agent_col:
-        raise ValueError("Could not find CCR Agent Name column in the uploaded file.")
+        raise ValueError("Could not locate CCR Agent Name column in the uploaded file.")
     if not phone_col:
-        raise ValueError("Could not find Customer Phone Number column in the uploaded file.")
+        raise ValueError("Could not locate Customer Phone Number column in the uploaded file.")
     if not qa_score_col:
-        raise ValueError("Could not find 'QA score' column in the uploaded file.")
+        raise ValueError("Could not locate 'QA score' column in the uploaded file.")
 
     grouped_agents: Dict[str, List[Dict[str, Any]]] = {}
 
     for _, row in df.iterrows():
         agent_name = str(row.get(agent_col, "")).strip()
-        if not agent_name or agent_name.lower() == "nan":
+        if not agent_name or agent_name.lower() in ["nan", "none"]:
             continue
 
         calling_number = str(row.get(phone_col, "Unknown Number")).strip()
         qa_score = clean_qa_score(row.get(qa_score_col, 0))
+        overall_comment = str(row.get(overall_comment_col, "")).strip() if overall_comment_col else ""
+        if overall_comment.lower() in ["nan", "none"]:
+            overall_comment = ""
 
         missed_areas = []
 
-        # Check for Critical Errors
-        if crit_error_flag_col:
-            flag_val = str(row.get(crit_error_flag_col, "")).strip().lower()
+        # 1. Critical Errors Check
+        if crit_flag_col:
+            flag_val = str(row.get(crit_flag_col, "")).strip().lower()
             if flag_val in ["yes", "true", "1"]:
-                crit_desc = str(row.get(crit_error_comment_col, "Critical error committed.")).strip()
-                if crit_desc.lower() == "nan" or not crit_desc:
-                    crit_desc = "Critical error flagged on call."
-                missed_areas.append({
-                    "category": "Critical Error",
-                    "reason": crit_desc
-                })
+                crit_desc = str(row.get(crit_desc_col, "Critical error committed.")).strip()
+                if not crit_desc or crit_desc.lower() in ["nan", "none"]:
+                    crit_desc = "Critical process violation occurred on this call."
+                missed_areas.append({"category": "Critical Process Compliance", "reason": crit_desc})
 
-        # Scan each rubric category for a score of 0
-        for rubric in RUBRIC_MAPPINGS:
-            for s_hint in rubric["score_col_hints"]:
-                matched_s_col = find_column(cols, [s_hint])
-                if matched_s_col:
-                    raw_score = row.get(matched_s_col)
-                    try:
-                        numeric_score = float(str(raw_score).replace("%", "").strip())
-                    except (ValueError, TypeError):
-                        numeric_score = None
+        # 2. Rubric-by-Rubric Fail Scan
+        for rubric in RUBRIC_DEFINITIONS:
+            s_col = match_col(rubric["score_hints"])
+            if s_col:
+                score_val = row.get(s_col)
+                if is_failed_score(score_val):
+                    # Discovered 0: Extract the reason from comment column
+                    reason_text = ""
+                    c_col = match_col(rubric["comment_hints"])
+                    if c_col:
+                        val = str(row.get(c_col, "")).strip()
+                        if val and val.lower() not in ["nan", "none", "mindset okay", "introduced professionally", "complied to the authentification checks"]:
+                            reason_text = val
 
-                    if numeric_score == 0:
-                        reason_text = ""
-                        for c_hint in rubric["comment_col_hints"]:
-                            matched_c_col = find_column(cols, [c_hint])
-                            if matched_c_col:
-                                c_val = str(row.get(matched_c_col, "")).strip()
-                                if c_val and c_val.lower() != "nan":
-                                    reason_text = c_val
-                                    break
-                        
-                        if not reason_text:
-                            reason_text = f"Failed requirements for {rubric['category']}."
+                    # Fallback to overall comment or category description
+                    if not reason_text:
+                        reason_text = overall_comment if overall_comment else f"Did not meet audit standards for {rubric['category']}."
 
-                        missed_areas.append({
-                            "category": rubric["category"],
-                            "reason": reason_text
-                        })
+                    missed_areas.append({
+                        "category": rubric["category"],
+                        "reason": reason_text
+                    })
+
+        # 3. SAFETY NET: If QA score was penalized (< 100%) but missed_areas is still empty
+        if qa_score < 100 and len(missed_areas) == 0:
+            deduction = int(100 - qa_score) if (100 - qa_score).is_integer() else round(100 - qa_score, 1)
+            
+            # Check if any comment exists anywhere in the row
+            found_any_comment = ""
+            for nc, oc in norm_to_orig.items():
+                if "comment" in nc:
+                    c_val = str(row.get(oc, "")).strip()
+                    if c_val and c_val.lower() not in ["nan", "none", "mindset okay", "the performance met expectation", "the call was closed professionally"]:
+                        found_any_comment = c_val
                         break
+            
+            if found_any_comment:
+                missed_areas.append({
+                    "category": "Process Compliance",
+                    "reason": found_any_comment
+                })
+            elif overall_comment:
+                missed_areas.append({
+                    "category": "Call Evaluation",
+                    "reason": overall_comment
+                })
+            else:
+                missed_areas.append({
+                    "category": "Process Compliance",
+                    "reason": f"Deduction of {deduction}% applied based on QA evaluation guidelines."
+                })
 
         call_data = {
             "phone": calling_number,
@@ -165,6 +211,5 @@ def parse_excel_report(file_bytes) -> Dict[str, List[Dict[str, Any]]]:
             grouped_agents[agent_name] = []
         grouped_agents[agent_name].append(call_data)
 
-    # Sort dictionary alphabetically by Agent Name (A to Z)
-    sorted_agents = dict(sorted(grouped_agents.items(), key=lambda item: item[0].strip().lower()))
-    return sorted_agents
+    # Sort alphabetically by Agent Name (A to Z)
+    return dict(sorted(grouped_agents.items(), key=lambda x: x[0].strip().lower()))

@@ -6,35 +6,6 @@ from modules.anonymizer import (
 )
 from modules.llm_engine import call_llm_resilient
 
-CATEGORY_CLEAN_MAP = {
-    "call opening": "Call Opening & Professionalism",
-    "identification": "KYC & Verification",
-    "enthusiasm": "Tone & Enthusiasm",
-    "active listening": "Active Listening & Empathy",
-    "clear communication": "Clear Communication & Etiquette",
-    "telephone etiquette": "Clear Communication & Etiquette",
-    "understanding": "Understanding the Issue",
-    "troubleshooting": "Process Compliance & Troubleshooting",
-    "process compliance": "Process Compliance",
-    "customer education": "Customer Education",
-    "issue resolution": "Issue Resolution",
-    "resolve": "Issue Resolution",
-    "escalates": "Issue Escalation",
-    "calls back": "Callback Procedure",
-    "call closing": "Closing Procedure",
-    "closing procedure": "Closing Procedure",
-    "critical error": "Critical Process Compliance"
-}
-
-def clean_category_name(raw_cat: str) -> str:
-    """Standardizes rubric names into clean corporate headings."""
-    lower = raw_cat.lower()
-    for key, val in CATEGORY_CLEAN_MAP.items():
-        if key in lower:
-            return val
-    cleaned = raw_cat.split("-")[-1].strip()
-    return cleaned.title() if cleaned else "Process Compliance"
-
 def summarize_missed_area_with_ai(
     category: str,
     raw_reason: str,
@@ -44,26 +15,24 @@ def summarize_missed_area_with_ai(
     groq_key: str = ""
 ) -> str:
     """
-    Transforms reviewer notes into actionable, positive coaching advice starting
-    with an active directive verb. Cascades: Gemini -> OpenRouter -> Groq.
+    Transforms reviewer notes into actionable coaching advice strictly for ONE category.
+    Strictly forbids combining unrelated areas into a compound sentence.
     """
     clean_cat = scrub_sensitive_text(category)
     clean_reason = scrub_sensitive_text(raw_reason)
 
     sys_prompt = (
-        "You are an executive QA coach writing formal email feedback to an agent.\n"
-        "Transform the audit notes into a single constructive, actionable coaching sentence.\n"
-        "RULES:\n"
-        "1. Start directly with an active directive verb (e.g., 'Personalize the conversation...', "
-        "'Offer further assistance...', 'Ensure mandatory verification is completed...').\n"
-        "2. Do NOT mention category labels, codes, or reviewer names.\n"
-        "3. Zero conversational filler, zero preamble. Maximum 1 concise sentence.\n"
-        "4. Never mention company names."
+        f"You are an executive QA coach writing feedback for the specific rubric: '{clean_cat}'.\n"
+        "STRICT CONSTRAINTS:\n"
+        f"1. Focus EXCLUSIVELY on '{clean_cat}'. Do NOT combine or mention tasks from other categories.\n"
+        "2. For example: If this is about communication, do NOT mention bundles or WiFi. If this is about education, do NOT mention personalizing names.\n"
+        "3. Provide exactly ONE concise sentence starting with an active directive verb (e.g., 'Ensure...', 'Personalize...', 'Follow...', 'Educate...').\n"
+        "4. Zero conversational filler, zero preamble, no company names."
     )
     if custom_rules:
         sys_prompt += f"\nSupplementary guidelines: {custom_rules}"
 
-    user_prompt = f"Category: {clean_cat}\nNotes: {clean_reason}\nProvide positive, formal coaching advice:"
+    user_prompt = f"Category: {clean_cat}\nReviewer notes: {clean_reason}\nProvide concise advice for THIS category only:"
     try:
         advice, _, _ = call_llm_resilient(
             system_prompt=sys_prompt,
@@ -76,7 +45,7 @@ def summarize_missed_area_with_ai(
         advice = re.sub(r"^[-*•◦\d.]+\s*", "", advice).strip()
         return advice
     except Exception:
-        fallback = clean_reason if clean_reason else f"Adhere to company procedures for {clean_cat}."
+        fallback = clean_reason if clean_reason else f"Ensure compliance with company standards for {clean_cat}."
         return fallback
 
 def convert_email_to_rich_html(plain_text: str) -> str:
@@ -144,7 +113,7 @@ def build_feedback_email_for_agent(
 ) -> Tuple[str, str, str]:
     """
     Formal QA Breakdown Assembler:
-    Guarantees every penalized call (< 100%) has an explanatory coaching bullet.
+    Guarantees every individual failure receives its own separate bullet point.
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
@@ -163,7 +132,7 @@ def build_feedback_email_for_agent(
         )
         return email, "Deterministic Rule", "Internal"
 
-    # 2. Formal Structure
+    # 2. Formal Breakdown
     email_blocks = []
     email_blocks.append(f"Hi {first_name},")
 
@@ -187,26 +156,20 @@ def build_feedback_email_for_agent(
         else:
             has_any_missed = True
             
-            # Guarantee: If score < 100, we NEVER output a blank call without coaching advice
-            if not missed:
-                deduction = 100 - score_val
-                ded_str = f"{int(deduction)}" if deduction.is_integer() else f"{round(deduction, 1)}"
-                call_lines.append(f"    ◦ Process Compliance: Review call handling procedures to recover the {ded_str}% deduction on this interaction.")
-            else:
-                for item in missed:
-                    raw_cat = item.get("category", "")
-                    cat_label = clean_category_name(raw_cat)
-                    reason = item.get("reason", "")
-                    
-                    coaching_advice = summarize_missed_area_with_ai(
-                        category=raw_cat,
-                        raw_reason=reason,
-                        custom_rules=custom_rules,
-                        gemini_key=gemini_key,
-                        openrouter_key=openrouter_key,
-                        groq_key=groq_key
-                    )
-                    call_lines.append(f"    ◦ {cat_label}: {coaching_advice}")
+            # Every missed area is appended as its own separate sub-bullet
+            for item in missed:
+                raw_cat = item.get("category", "Process Compliance")
+                reason = item.get("reason", "")
+                
+                coaching_advice = summarize_missed_area_with_ai(
+                    category=raw_cat,
+                    raw_reason=reason,
+                    custom_rules=custom_rules,
+                    gemini_key=gemini_key,
+                    openrouter_key=openrouter_key,
+                    groq_key=groq_key
+                )
+                call_lines.append(f"    ◦ {raw_cat}: {coaching_advice}")
 
         call_sections.append("\n".join(call_lines))
 

@@ -1,10 +1,35 @@
 import re
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Set
 from modules.anonymizer import (
     extract_first_name,
     scrub_sensitive_text
 )
 from modules.llm_engine import call_llm_resilient
+
+STOPWORDS = {
+    "the", "and", "to", "of", "a", "in", "for", "is", "on", "that", "by", "this",
+    "with", "i", "you", "it", "not", "or", "be", "are", "from", "at", "as", "your",
+    "all", "have", "new", "more", "an", "was", "we", "will", "would", "ensure"
+}
+
+def is_duplicate_advice(new_advice: str, existing_advices: List[str]) -> bool:
+    """
+    Checks if the newly generated coaching advice is semantically identical
+    (>65% keyword overlap) to any advice already included on this call.
+    """
+    words_new = set(re.findall(r'\b[a-z]{3,}\b', new_advice.lower())) - STOPWORDS
+    if not words_new:
+        return False
+
+    for existing in existing_advices:
+        words_exist = set(re.findall(r'\b[a-z]{3,}\b', existing.lower())) - STOPWORDS
+        if not words_exist:
+            continue
+        common_words = words_new.intersection(words_exist)
+        overlap = len(common_words) / min(len(words_new), len(words_exist))
+        if overlap >= 0.65:
+            return True
+    return False
 
 def summarize_missed_area_with_ai(
     category: str,
@@ -16,7 +41,6 @@ def summarize_missed_area_with_ai(
 ) -> str:
     """
     Transforms reviewer notes into actionable coaching advice strictly for ONE category.
-    Strictly forbids combining unrelated areas into a compound sentence.
     """
     clean_cat = scrub_sensitive_text(category)
     clean_reason = scrub_sensitive_text(raw_reason)
@@ -25,9 +49,8 @@ def summarize_missed_area_with_ai(
         f"You are an executive QA coach writing feedback for the specific rubric: '{clean_cat}'.\n"
         "STRICT CONSTRAINTS:\n"
         f"1. Focus EXCLUSIVELY on '{clean_cat}'. Do NOT combine or mention tasks from other categories.\n"
-        "2. For example: If this is about communication, do NOT mention bundles or WiFi. If this is about education, do NOT mention personalizing names.\n"
-        "3. Provide exactly ONE concise sentence starting with an active directive verb (e.g., 'Ensure...', 'Personalize...', 'Follow...', 'Educate...').\n"
-        "4. Zero conversational filler, zero preamble, no company names."
+        "2. Provide exactly ONE concise sentence starting with an active directive verb (e.g., 'Ensure...', 'Personalize...', 'Follow...', 'Educate...').\n"
+        "3. Zero conversational filler, zero preamble, no company names."
     )
     if custom_rules:
         sys_prompt += f"\nSupplementary guidelines: {custom_rules}"
@@ -113,7 +136,7 @@ def build_feedback_email_for_agent(
 ) -> Tuple[str, str, str]:
     """
     Formal QA Breakdown Assembler:
-    Guarantees every individual failure receives its own separate bullet point.
+    Guarantees every failure is unique—zero repeated categories or duplicate advice.
     """
     first_name = extract_first_name(agent_name)
     total_calls = len(calls)
@@ -155,12 +178,17 @@ def build_feedback_email_for_agent(
             call_lines.append("    ◦ You scored 100% in this call. Good job")
         else:
             has_any_missed = True
-            
-            # Every missed area is appended as its own separate sub-bullet
+            rendered_advices: List[str] = []
+            seen_categories: Set[str] = set()
+
             for item in missed:
                 raw_cat = item.get("category", "Process Compliance")
                 reason = item.get("reason", "")
-                
+
+                # Skip if this exact category already generated a bullet on this call
+                if raw_cat in seen_categories:
+                    continue
+
                 coaching_advice = summarize_missed_area_with_ai(
                     category=raw_cat,
                     raw_reason=reason,
@@ -169,7 +197,18 @@ def build_feedback_email_for_agent(
                     openrouter_key=openrouter_key,
                     groq_key=groq_key
                 )
+
+                # Skip if the advice is functionally identical to advice already given on this call
+                if is_duplicate_advice(coaching_advice, rendered_advices):
+                    continue
+
+                seen_categories.add(raw_cat)
+                rendered_advices.append(coaching_advice)
                 call_lines.append(f"    ◦ {raw_cat}: {coaching_advice}")
+
+            # Fallback if all items were deduplicated down to 0
+            if len(call_lines) == 1:
+                call_lines.append(f"    ◦ Process Compliance: Review quality evaluation standards to recover points on this call.")
 
         call_sections.append("\n".join(call_lines))
 
@@ -179,4 +218,4 @@ def build_feedback_email_for_agent(
         email_blocks.append("I have attached your penalized calls. Please work on the highlighted areas.")
 
     final_email = "\n\n".join(email_blocks)
-    return final_email, "Formal Nested Engine", "Gemini/OpenRouter/Groq"
+    return final_email, "Formal Nested Engine (De-duplicated)", "Gemini/OpenRouter/Groq"
